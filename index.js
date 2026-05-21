@@ -61,10 +61,11 @@ app.get('/', (req, res) => {
 const apiRouter = express.Router();
 app.use('/api/v1', apiRouter);
 
-// TODO: Thêm routes ở đây
-apiRouter.use('/auth', require('./src/routes/auth.routes'));
+// Routes
+apiRouter.use('/auth',  require('./src/routes/auth.routes'));
+apiRouter.use('/users', require('./src/routes/user.routes'));
 // apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
-// apiRouter.use('/bookings', require('./src/routes/booking.routes'));
+// apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
 
 // Test route
 apiRouter.get('/ping', (req, res) => {
