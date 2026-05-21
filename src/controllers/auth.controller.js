@@ -438,6 +438,123 @@ const resetPassword = async (req, res) => {
 const getProfile = (req, res) =>
   res.json({ success: true, user: req.user.toPublicJSON() });
 
+// ────────────────────────────────────────────────────────
+// H. Update Profile (PUT /users/me)
+// ────────────────────────────────────────────────────────
+
+const ALLOWED_UPDATE_FIELDS = ['fullName', 'phoneNumber', 'address'];
+
+const updateProfile = async (req, res) => {
+  try {
+    const updates = {};
+
+    // Chỉ cho phép các field được whitelist
+    for (const field of ALLOWED_UPDATE_FIELDS) {
+      if (req.body[field] !== undefined) {
+        updates[field] = typeof req.body[field] === 'string'
+          ? req.body[field].trim()
+          : req.body[field];
+      }
+    }
+
+    // Validate
+    if (updates.fullName !== undefined && !updates.fullName) {
+      return res.status(400).json({ success: false, message: 'Họ và tên không được để trống' });
+    }
+    if (updates.phoneNumber && !PHONE_REGEX.test(updates.phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Số điện thoại phải là 10 số và bắt đầu bằng 03, 05, 07, 08, 09',
+      });
+    }
+
+    // Không cho phép cập nhật email, role, password qua đây
+    if (req.body.email || req.body.role || req.body.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Không thể cập nhật email, role hoặc mật khẩu qua endpoint này',
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Cập nhật thông tin thành công',
+      user: user.toPublicJSON(),
+    });
+  } catch (error) {
+    console.error('❌ [UpdateProfile] Lỗi:', error.message);
+    return res.status(500).json({ success: false, message: 'Không thể cập nhật thông tin' });
+  }
+};
+
+// ────────────────────────────────────────────────────────
+// I. Change Password (PUT /users/me/password)
+// ────────────────────────────────────────────────────────
+
+const changePassword = async (req, res) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || '');
+    const newPassword     = String(req.body.newPassword || '');
+    const confirmPassword = String(req.body.confirmPassword || '');
+
+    // Validate
+    if (!currentPassword) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không được để trống' });
+    }
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 8 ký tự' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Xác nhận mật khẩu không khớp' });
+    }
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu mới không được trùng mật khẩu hiện tại' });
+    }
+
+    // Lấy user kèm password (select: false trong schema)
+    const user = await User.findById(req.user._id).select('+password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+    }
+
+    // Tài khoản Google không có password
+    if (!user.password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tài khoản Google không thể đổi mật khẩu theo cách này',
+      });
+    }
+
+    // Kiểm tra mật khẩu hiện tại
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+    }
+
+    // Cập nhật mật khẩu — pre('save') hook sẽ hash tự động
+    user.password = newPassword;
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại để xác nhận.',
+    });
+  } catch (error) {
+    console.error('❌ [ChangePassword] Lỗi:', error.message);
+    return res.status(500).json({ success: false, message: 'Không thể đổi mật khẩu' });
+  }
+};
+
 const logout = (req, res) =>
   res.json({ success: true, message: 'Logout successful' });
 
@@ -482,6 +599,8 @@ module.exports = {
   registerRestaurantOwner,
   login,
   getProfile,
+  updateProfile,
+  changePassword,
   logout,
   googleNotConfigured,
   googleCallback,
