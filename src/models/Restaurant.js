@@ -1,0 +1,263 @@
+const mongoose = require('mongoose');
+
+const restaurantSchema = new mongoose.Schema(
+  {
+    // ─── Owner Information ───
+    ownerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Owner ID là bắt buộc'],
+      index: true,
+    },
+
+    // ─── Basic Information ───
+    name: {
+      type: String,
+      required: [true, 'Tên nhà hàng là bắt buộc'],
+      trim: true,
+      maxlength: [200, 'Tên nhà hàng không được vượt quá 200 ký tự'],
+    },
+    description: {
+      type: String,
+      required: [true, 'Mô tả là bắt buộc'],
+      trim: true,
+      maxlength: [2000, 'Mô tả không được vượt quá 2000 ký tự'],
+    },
+    
+    // ─── Contact Information ───
+    phoneNumber: {
+      type: String,
+      required: [true, 'Số điện thoại là bắt buộc'],
+      trim: true,
+    },
+    email: {
+      type: String,
+      required: [true, 'Email là bắt buộc'],
+      lowercase: true,
+      trim: true,
+    },
+    
+    // ─── Location ───
+    address: {
+      street: { type: String, required: true, trim: true },
+      ward: { type: String, required: true, trim: true },
+      district: { type: String, required: true, trim: true },
+      city: { type: String, required: true, trim: true },
+      fullAddress: { type: String, trim: true },
+    },
+    coordinates: {
+      latitude: { type: Number, default: null },
+      longitude: { type: Number, default: null },
+    },
+
+    // ─── Business Details ───
+    cuisineTypes: [{
+      type: String,
+      trim: true,
+    }],
+    priceRange: {
+      type: String,
+      enum: ['budget', 'moderate', 'expensive', 'luxury'],
+      default: 'moderate',
+    },
+    capacity: {
+      type: Number,
+      default: 0,
+      min: [0, 'Sức chứa không thể âm'],
+    },
+
+    // ─── Operating Hours ───
+    operatingHours: {
+      monday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      tuesday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      wednesday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      thursday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      friday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      saturday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      sunday: { open: String, close: String, closed: { type: Boolean, default: false } },
+    },
+
+    // ─── Media ───
+    images: [{
+      url: { type: String, required: true },
+      caption: { type: String, default: '' },
+      isPrimary: { type: Boolean, default: false },
+      uploadedAt: { type: Date, default: Date.now },
+    }],
+    logo: {
+      type: String,
+      default: null,
+    },
+
+    // ─── Approval Status ───
+    approvalStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'suspended'],
+      default: 'pending',
+      index: true,
+    },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    approvedAt: {
+      type: Date,
+      default: null,
+    },
+    rejectionReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    suspensionReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    // ─── Financial ───
+    balance: {
+      type: Number,
+      default: 0,
+      min: [0, 'Số dư không thể âm'],
+    },
+    totalRevenue: {
+      type: Number,
+      default: 0,
+      min: [0, 'Doanh thu không thể âm'],
+    },
+    totalCommission: {
+      type: Number,
+      default: 0,
+      min: [0, 'Hoa hồng không thể âm'],
+    },
+    commissionRate: {
+      type: Number,
+      default: 10, // 10% default commission
+      min: [0, 'Tỷ lệ hoa hồng không thể âm'],
+      max: [100, 'Tỷ lệ hoa hồng không thể vượt quá 100%'],
+    },
+
+    // ─── Business Registration ───
+    businessLicense: {
+      number: { type: String, default: null },
+      imageUrl: { type: String, default: null },
+      verifiedAt: { type: Date, default: null },
+    },
+    taxCode: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    // ─── Bank Information (for withdrawals) ───
+    bankInfo: {
+      bankName: { type: String, default: null },
+      accountNumber: { type: String, default: null },
+      accountHolder: { type: String, default: null },
+      branch: { type: String, default: null },
+    },
+
+    // ─── Statistics ───
+    stats: {
+      totalBookings: { type: Number, default: 0 },
+      completedBookings: { type: Number, default: 0 },
+      cancelledBookings: { type: Number, default: 0 },
+      averageRating: { type: Number, default: 0, min: 0, max: 5 },
+      totalReviews: { type: Number, default: 0 },
+    },
+
+    // ─── Status ───
+    active: {
+      type: Boolean,
+      default: true,
+    },
+    featured: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// ─── Indexes ───
+restaurantSchema.index({ name: 'text', description: 'text' });
+restaurantSchema.index({ 'address.city': 1, 'address.district': 1 });
+restaurantSchema.index({ cuisineTypes: 1 });
+restaurantSchema.index({ priceRange: 1 });
+restaurantSchema.index({ 'stats.averageRating': -1 });
+
+// ─── Virtual: Primary Image ───
+restaurantSchema.virtual('primaryImage').get(function () {
+  const primary = this.images.find(img => img.isPrimary);
+  return primary ? primary.url : (this.images[0]?.url || null);
+});
+
+// ─── Method: Public JSON ───
+restaurantSchema.methods.toPublicJSON = function () {
+  return {
+    id: this._id.toString(),
+    ownerId: this.ownerId,
+    name: this.name,
+    description: this.description,
+    phoneNumber: this.phoneNumber,
+    email: this.email,
+    address: this.address,
+    coordinates: this.coordinates,
+    cuisineTypes: this.cuisineTypes,
+    priceRange: this.priceRange,
+    capacity: this.capacity,
+    operatingHours: this.operatingHours,
+    images: this.images,
+    logo: this.logo,
+    primaryImage: this.primaryImage,
+    approvalStatus: this.approvalStatus,
+    stats: this.stats,
+    active: this.active,
+    featured: this.featured,
+    createdAt: this.createdAt,
+    updatedAt: this.updatedAt,
+  };
+};
+
+// ─── Method: Admin JSON (includes sensitive data) ───
+restaurantSchema.methods.toAdminJSON = function () {
+  return {
+    id: this._id.toString(),
+    ownerId: this.ownerId,
+    name: this.name,
+    description: this.description,
+    phoneNumber: this.phoneNumber,
+    email: this.email,
+    address: this.address,
+    coordinates: this.coordinates,
+    cuisineTypes: this.cuisineTypes,
+    priceRange: this.priceRange,
+    capacity: this.capacity,
+    operatingHours: this.operatingHours,
+    images: this.images,
+    logo: this.logo,
+    approvalStatus: this.approvalStatus,
+    approvedBy: this.approvedBy,
+    approvedAt: this.approvedAt,
+    rejectionReason: this.rejectionReason,
+    suspensionReason: this.suspensionReason,
+    balance: this.balance,
+    totalRevenue: this.totalRevenue,
+    totalCommission: this.totalCommission,
+    commissionRate: this.commissionRate,
+    businessLicense: this.businessLicense,
+    taxCode: this.taxCode,
+    bankInfo: this.bankInfo,
+    stats: this.stats,
+    active: this.active,
+    featured: this.featured,
+    createdAt: this.createdAt,
+    updatedAt: this.updatedAt,
+  };
+};
+
+module.exports = mongoose.model('Restaurant', restaurantSchema);

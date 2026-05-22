@@ -64,6 +64,7 @@ app.use('/api/v1', apiRouter);
 // Routes
 apiRouter.use('/auth',  require('./src/routes/auth.routes'));
 apiRouter.use('/users', require('./src/routes/user.routes'));
+apiRouter.use('/admin', require('./src/routes/admin.routes'));
 // apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
 // apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
 
