@@ -2,12 +2,14 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const http = require('http');
 
 // Load env
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const server = http.createServer(app);
 
 // ─────────────────────────────────────────────
 // Middleware
@@ -66,8 +68,11 @@ apiRouter.use('/auth',  require('./src/routes/auth.routes'));
 apiRouter.use('/users', require('./src/routes/user.routes'));
 apiRouter.use('/admin', require('./src/routes/admin.routes'));
 apiRouter.use('/owner', require('./src/routes/owner.routes'));
+apiRouter.use('/owner', require('./src/routes/owner.menu.routes'));
+apiRouter.use('/owner', require('./src/routes/owner.table.routes'));
 apiRouter.use('/upload', require('./src/routes/upload.routes'));
-// apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
+apiRouter.use('/chat', require('./src/routes/chat.routes'));
+apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
 // apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
 
 // Test route
@@ -94,7 +99,11 @@ app.use((req, res) => {
 // ─────────────────────────────────────────────
 // Start Server
 // ─────────────────────────────────────────────
-app.listen(PORT, () => {
+const { createSocketServer } = require('./src/socket');
+const io = createSocketServer(server, allowedOrigins);
+app.set('io', io);
+
+server.listen(PORT, () => {
   console.log(`🚀 BookEat API running at: http://localhost:${PORT}`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log(`📡 API base: http://localhost:${PORT}/api/v1`);
