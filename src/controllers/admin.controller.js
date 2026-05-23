@@ -2,6 +2,7 @@
 
 const bcrypt = require('bcryptjs');
 const User   = require('../models/User');
+const Restaurant = require('../models/Restaurant');
 
 // ────────────────────────────────────────────────────────
 // A. Dashboard — Thống kê tổng quan
@@ -18,6 +19,12 @@ const getDashboard = async (req, res) => {
       inactiveUsers,
       verifiedUsers,
       recentUsers,
+      totalRestaurants,
+      pendingRestaurants,
+      approvedRestaurants,
+      suspendedRestaurants,
+      rejectedRestaurants,
+      deletedRestaurants,
     ] = await Promise.all([
       User.countDocuments(),
       User.countDocuments({ role: 'customer' }),
@@ -30,6 +37,12 @@ const getDashboard = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(5)
         .select('username email fullName role active createdAt'),
+      Restaurant.countDocuments({ deletedAt: null }),
+      Restaurant.countDocuments({ approvalStatus: 'pending', deletedAt: null }),
+      Restaurant.countDocuments({ approvalStatus: 'approved', deletedAt: null }),
+      Restaurant.countDocuments({ approvalStatus: 'suspended', deletedAt: null }),
+      Restaurant.countDocuments({ approvalStatus: 'rejected', deletedAt: null }),
+      Restaurant.countDocuments({ deletedAt: { $ne: null } }),
     ]);
 
     // Thống kê đăng ký theo 7 ngày gần nhất
@@ -58,6 +71,14 @@ const getDashboard = async (req, res) => {
           activeUsers,
           inactiveUsers,
           verifiedUsers,
+        },
+        restaurantStats: {
+          totalRestaurants,
+          pendingRestaurants,
+          approvedRestaurants,
+          suspendedRestaurants,
+          rejectedRestaurants,
+          deletedRestaurants,
         },
         registrationTrend: registrationTrend.map((item) => ({
           date: item._id,

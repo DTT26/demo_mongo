@@ -28,11 +28,16 @@ router.delete('/users/:id',          adminController.deleteUser);
 router.patch( '/users/:id/password', adminController.resetUserPassword);
 
 // ─── Restaurants Management ───
-router.get( '/restaurants',               adminRestaurantController.getRestaurants);
-router.get( '/restaurants/:id',           adminRestaurantController.getRestaurantById);
-router.put( '/restaurants/:id/approve',   adminRestaurantController.approveRestaurant);
-router.put( '/restaurants/:id/reject',    adminRestaurantController.rejectRestaurant);
-router.put( '/restaurants/:id/suspend',   adminRestaurantController.suspendRestaurant);
+router.get(   '/restaurants',                 adminRestaurantController.getRestaurants);
+router.get(   '/restaurants/:id',             adminRestaurantController.getRestaurantById);
+router.put(   '/restaurants/:id/approve',     adminRestaurantController.approveRestaurant);
+router.put(   '/restaurants/:id/reject',      adminRestaurantController.rejectRestaurant);
+router.put(   '/restaurants/:id/suspend',     adminRestaurantController.suspendRestaurant);
+router.put(   '/restaurants/:id/unsuspend',   adminRestaurantController.unsuspendRestaurant);
+router.delete('/restaurants/:id',             adminRestaurantController.softDeleteRestaurant);
+router.put(   '/restaurants/:id/restore',     adminRestaurantController.restoreRestaurant);
+router.patch( '/restaurants/:id',             adminRestaurantController.updateRestaurant);
+router.get(   '/restaurants/:id/activity-logs', adminRestaurantController.getActivityLogs);
 
 // ─── Bookings Management ───
 const adminBookingController = require('../controllers/admin.booking.controller');

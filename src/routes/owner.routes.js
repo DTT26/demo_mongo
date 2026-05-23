@@ -13,5 +13,8 @@ router.use(restrictTo('restaurant_owner'));
 // ─── Restaurants ───
 router.post('/restaurants', ownerRestaurantController.createRestaurant);
 router.get('/restaurants',  ownerRestaurantController.getMyRestaurants);
+router.get('/restaurants/:restaurantId', ownerRestaurantController.getMyRestaurantById);
+router.put('/restaurants/:restaurantId', ownerRestaurantController.updateRestaurant);
+router.get('/restaurants/:restaurantId/dashboard', ownerRestaurantController.getRestaurantDashboard);
 
 module.exports = router;

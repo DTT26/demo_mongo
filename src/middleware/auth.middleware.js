@@ -1,17 +1,5 @@
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-
-const getJwtSecret = () => {
-  if (process.env.JWT_SECRET) {
-    return process.env.JWT_SECRET;
-  }
-
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('JWT_SECRET is required in production');
-  }
-
-  return 'bookeat_dev_secret_change_me';
-};
+const { verifyJwtToken } = require('../utils/jwt');
 
 // ─────────────────────────────────────────────
 // Middleware: Xác thực JWT Token
@@ -32,7 +20,7 @@ const protect = async (req, res, next) => {
     }
 
     // Verify token
-    const decoded = jwt.verify(token, getJwtSecret());
+    const decoded = verifyJwtToken(token);
 
     // Tìm user trong DB
     const user = await User.findById(decoded.id || decoded.sub).select('-password');

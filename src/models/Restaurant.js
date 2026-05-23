@@ -175,6 +175,29 @@ const restaurantSchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    unsuspendedAt: {
+      type: Date,
+      default: null,
+    },
+    unsuspendedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    deleteReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
 
     // ─── Financial ───
     balance: {
@@ -237,6 +260,14 @@ const restaurantSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    hasMenu: {
+      type: Boolean,
+      default: false,
+    },
+    hasTableLayout: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
@@ -249,6 +280,10 @@ restaurantSchema.index({ 'address.city': 1, 'address.district': 1 });
 restaurantSchema.index({ cuisineTypes: 1 });
 restaurantSchema.index({ priceRange: 1 });
 restaurantSchema.index({ 'stats.averageRating': -1 });
+restaurantSchema.index({ deletedAt: 1 });
+restaurantSchema.index({ featured: 1 });
+restaurantSchema.index({ createdAt: -1 });
+restaurantSchema.index({ ownerId: 1, approvalStatus: 1 });
 
 // ─── Virtual: Primary Image ───
 restaurantSchema.virtual('primaryImage').get(function () {
@@ -291,6 +326,8 @@ restaurantSchema.methods.toPublicJSON = function () {
     stats: this.stats,
     active: this.active,
     featured: this.featured,
+    hasMenu: this.hasMenu,
+    hasTableLayout: this.hasTableLayout,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
@@ -318,6 +355,11 @@ restaurantSchema.methods.toAdminJSON = function () {
     approvedAt: this.approvedAt,
     rejectionReason: this.rejectionReason,
     suspensionReason: this.suspensionReason,
+    unsuspendedAt: this.unsuspendedAt,
+    unsuspendedBy: this.unsuspendedBy,
+    deletedAt: this.deletedAt,
+    deletedBy: this.deletedBy,
+    deleteReason: this.deleteReason,
     balance: this.balance,
     totalRevenue: this.totalRevenue,
     totalCommission: this.totalCommission,
@@ -328,6 +370,8 @@ restaurantSchema.methods.toAdminJSON = function () {
     stats: this.stats,
     active: this.active,
     featured: this.featured,
+    hasMenu: this.hasMenu,
+    hasTableLayout: this.hasTableLayout,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

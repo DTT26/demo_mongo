@@ -301,10 +301,134 @@ const buildAdminNotificationTemplate = ({ user }) =>
     </table>
   `);
 
+// ─── E. Restaurant status notifications ───
+const sendRestaurantApprovedEmail = async (owner, restaurant) => {
+  const subject = `✅ Nhà hàng ${restaurant.name} đã được duyệt — BookEat`;
+  const html = buildRestaurantApprovedTemplate({
+    fullName: owner.fullName,
+    restaurantName: restaurant.name,
+  });
+  const text = `Xin chào ${owner.fullName},\n\nChúc mừng! Nhà hàng "${restaurant.name}" của bạn đã được duyệt thành công trên hệ thống BookEat.\n\nBookEat Team`;
+  await sendMail({ to: owner.email, subject, html, text });
+};
+
+const sendRestaurantRejectedEmail = async (owner, restaurant, reason) => {
+  const subject = `❌ Hồ sơ nhà hàng ${restaurant.name} bị từ chối — BookEat`;
+  const html = buildRestaurantRejectedTemplate({
+    fullName: owner.fullName,
+    restaurantName: restaurant.name,
+    reason,
+  });
+  const text = `Xin chào ${owner.fullName},\n\nRất tiếc, hồ sơ nhà hàng "${restaurant.name}" của bạn đã bị từ chối duyệt với lý do:\n${reason}\n\nVui lòng chỉnh sửa lại thông tin và nộp lại để được duyệt.\n\nBookEat Team`;
+  await sendMail({ to: owner.email, subject, html, text });
+};
+
+const sendRestaurantSuspendedEmail = async (owner, restaurant, reason) => {
+  const subject = `🚫 Nhà hàng ${restaurant.name} tạm thời bị ngưng hoạt động — BookEat`;
+  const html = buildRestaurantSuspendedTemplate({
+    fullName: owner.fullName,
+    restaurantName: restaurant.name,
+    reason,
+  });
+  const text = `Xin chào ${owner.fullName},\n\nNhà hàng "${restaurant.name}" của bạn đã bị tạm ngưng hoạt động trên hệ thống BookEat với lý do:\n${reason}\n\nVui lòng liên hệ Admin để giải quyết.\n\nBookEat Team`;
+  await sendMail({ to: owner.email, subject, html, text });
+};
+
+const sendRestaurantUnsuspendedEmail = async (owner, restaurant) => {
+  const subject = `🔓 Nhà hàng ${restaurant.name} đã được mở khóa hoạt động — BookEat`;
+  const html = buildRestaurantUnsuspendedTemplate({
+    fullName: owner.fullName,
+    restaurantName: restaurant.name,
+  });
+  const text = `Xin chào ${owner.fullName},\n\nNhà hàng "${restaurant.name}" của bạn đã được gỡ bỏ tạm ngưng và hoạt động bình thường trở lại.\n\nBookEat Team`;
+  await sendMail({ to: owner.email, subject, html, text });
+};
+
+// ─── Templates for Restaurant status notifications ───
+const buildRestaurantApprovedTemplate = ({ fullName, restaurantName }) =>
+  baseLayout(`
+    <h1 style="margin:0 0 8px;font-family:Georgia,serif;font-size:24px;font-weight:300;color:#065f46;">
+      ✅ Nhà hàng đã được duyệt thành công
+    </h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#b6ab9c;">Thông báo từ BookEat</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#444;line-height:1.6;">
+      Xin chào <strong>${fullName}</strong>,
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.7;">
+      Chúng tôi xin chúc mừng! Nhà hàng <strong>${restaurantName}</strong> của bạn đã được Admin phê duyệt thành công trên hệ thống <strong>BookEat</strong> và hiện đã hoạt động công khai.
+    </p>
+    <p style="margin:0;font-size:13px;color:#aaa;border-top:1px solid #f0ece6;padding-top:16px;">
+      Bây giờ bạn đã có thể đăng nhập vào trang quản trị của Chủ nhà hàng để bắt đầu quản lý thông tin và đặt bàn.
+    </p>
+  `);
+
+const buildRestaurantRejectedTemplate = ({ fullName, restaurantName, reason }) =>
+  baseLayout(`
+    <h1 style="margin:0 0 8px;font-family:Georgia,serif;font-size:24px;font-weight:300;color:#991b1b;">
+      ❌ Hồ sơ nhà hàng bị từ chối duyệt
+    </h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#b6ab9c;">Thông báo từ BookEat</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#444;line-height:1.6;">
+      Xin chào <strong>${fullName}</strong>,
+    </p>
+    <p style="margin:0 0 16px;font-size:14px;color:#666;line-height:1.7;">
+      Hồ sơ đăng ký nhà hàng <strong>${restaurantName}</strong> đã bị từ chối phê duyệt bởi Ban quản trị.
+    </p>
+    <div style="background:#fef2f2;border-left:4px solid #ef4444;padding:16px;margin:0 0 24px;">
+      <p style="margin:0 0 4px;font-size:13px;color:#991b1b;font-weight:600;">Lý do từ chối:</p>
+      <p style="margin:0;font-size:14px;color:#7f1d1d;line-height:1.5;">${reason}</p>
+    </div>
+    <p style="margin:0;font-size:13px;color:#aaa;border-top:1px solid #f0ece6;padding-top:16px;">
+      Vui lòng đăng nhập, chỉnh sửa thông tin thiếu sót hoặc sai lệch và nộp lại hồ sơ để chúng tôi duyệt lại.
+    </p>
+  `);
+
+const buildRestaurantSuspendedTemplate = ({ fullName, restaurantName, reason }) =>
+  baseLayout(`
+    <h1 style="margin:0 0 8px;font-family:Georgia,serif;font-size:24px;font-weight:300;color:#c2410c;">
+      🚫 Nhà hàng tạm thời bị khóa hoạt động
+    </h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#b6ab9c;">Thông báo từ BookEat</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#444;line-height:1.6;">
+      Xin chào <strong>${fullName}</strong>,
+    </p>
+    <p style="margin:0 0 16px;font-size:14px;color:#666;line-height:1.7;">
+      Chúng tôi xin thông báo nhà hàng <strong>${restaurantName}</strong> của bạn đã bị tạm khóa hoạt động trên hệ thống.
+    </p>
+    <div style="background:#fff7ed;border-left:4px solid #f97316;padding:16px;margin:0 0 24px;">
+      <p style="margin:0 0 4px;font-size:13px;color:#9a3412;font-weight:600;">Lý do tạm ngưng:</p>
+      <p style="margin:0;font-size:14px;color:#7c2d12;line-height:1.5;">${reason}</p>
+    </div>
+    <p style="margin:0;font-size:13px;color:#aaa;border-top:1px solid #f0ece6;padding-top:16px;">
+      Nếu bạn có bất kỳ thắc mắc nào, vui lòng phản hồi email này hoặc liên hệ bộ phận hỗ trợ khách hàng.
+    </p>
+  `);
+
+const buildRestaurantUnsuspendedTemplate = ({ fullName, restaurantName }) =>
+  baseLayout(`
+    <h1 style="margin:0 0 8px;font-family:Georgia,serif;font-size:24px;font-weight:300;color:#047857;">
+      🔓 Nhà hàng đã được mở khóa hoạt động
+    </h1>
+    <p style="margin:0 0 24px;font-size:14px;color:#b6ab9c;">Thông báo từ BookEat</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#444;line-height:1.6;">
+      Xin chào <strong>${fullName}</strong>,
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.7;">
+      Chúng tôi xin thông báo nhà hàng <strong>${restaurantName}</strong> của bạn đã được gỡ bỏ tạm ngưng và hoạt động bình thường trở lại trên hệ thống <strong>BookEat</strong>.
+    </p>
+    <p style="margin:0;font-size:13px;color:#aaa;border-top:1px solid #f0ece6;padding-top:16px;">
+      Khách hàng hiện có thể tiếp tục tìm kiếm và đặt bàn tại nhà hàng của bạn.
+    </p>
+  `);
+
 module.exports = {
   verifySmtp,
   sendVerificationEmail,
   sendResendVerificationEmail,
   sendForgotPasswordEmail,
   sendAdminNewUserNotification,
+  sendRestaurantApprovedEmail,
+  sendRestaurantRejectedEmail,
+  sendRestaurantSuspendedEmail,
+  sendRestaurantUnsuspendedEmail,
 };
