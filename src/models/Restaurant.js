@@ -36,7 +36,25 @@ const restaurantSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
-    
+    websiteUrl: {
+      type: String,
+      trim: true,
+      maxlength: [255, 'URL website không được vượt quá 255 ký tự'],
+      default: null,
+    },
+    contactHotline: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'Hotline không được vượt quá 50 ký tự'],
+      default: null,
+    },
+    contactSecondaryPhone: {
+      type: String,
+      trim: true,
+      maxlength: [50, 'SĐT phụ không được vượt quá 50 ký tự'],
+      default: null,
+    },
+
     // ─── Location ───
     address: {
       street: { type: String, required: true, trim: true },
@@ -89,7 +107,49 @@ const restaurantSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ─── Approval Status ───
+    // ─── Pricing ───
+    averagePrice: {
+      type: Number,
+      default: null,
+      min: [0, 'Giá trung bình không thể âm'],
+    },
+    priceRangeMin: {
+      type: Number,
+      default: null,
+      min: [0, 'Giá thấp nhất không thể âm'],
+    },
+    priceRangeMax: {
+      type: Number,
+      default: null,
+      min: [0, 'Giá cao nhất không thể âm'],
+    },
+
+    // ─── Display Information ───
+    statusMessage: { type: String, trim: true, maxlength: 255, default: null },
+    heroCity: { type: String, trim: true, maxlength: 100, default: null },
+    heroHeadline: { type: String, trim: true, maxlength: 255, default: null },
+    heroSubheadline: { type: String, trim: true, maxlength: 255, default: null },
+    heroSearchPlaceholder: { type: String, trim: true, maxlength: 255, default: null },
+    bookingInformation: { type: String, trim: true, default: null },
+    bookingNotes: { type: String, trim: true, default: null },
+    generalPromotions: { type: String, trim: true, default: null },
+    groupPromotions: { type: String, trim: true, default: null },
+    promotionNotes: { type: String, trim: true, default: null },
+    summaryHighlights: { type: String, trim: true, default: null },
+    suitableFor: [{ type: String, trim: true }],
+    signatureDishes: [{ type: String, trim: true }],
+    spaceDescriptionDetail: { type: String, trim: true, default: null },
+    uniqueFeatures: { type: String, trim: true, default: null },
+    pricingDetails: { type: String, trim: true, default: null },
+    menuHighlights: { type: String, trim: true, default: null },
+    policyRules: [{ type: String, trim: true }],
+    amenities: [{ type: String, trim: true }],
+    parkingDetails: { type: String, trim: true, default: null },
+    galleryNotes: { type: String, trim: true, default: null },
+    directionInfo: { type: String, trim: true, default: null },
+    operatingSchedule: { type: String, trim: true, default: null },
+
+
     approvalStatus: {
       type: String,
       enum: ['pending', 'approved', 'rejected', 'suspended'],
@@ -205,6 +265,9 @@ restaurantSchema.methods.toPublicJSON = function () {
     description: this.description,
     phoneNumber: this.phoneNumber,
     email: this.email,
+    websiteUrl: this.websiteUrl,
+    contactHotline: this.contactHotline,
+    contactSecondaryPhone: this.contactSecondaryPhone,
     address: this.address,
     coordinates: this.coordinates,
     cuisineTypes: this.cuisineTypes,
@@ -214,6 +277,16 @@ restaurantSchema.methods.toPublicJSON = function () {
     images: this.images,
     logo: this.logo,
     primaryImage: this.primaryImage,
+    averagePrice: this.averagePrice,
+    priceRangeMin: this.priceRangeMin,
+    priceRangeMax: this.priceRangeMax,
+    statusMessage: this.statusMessage,
+    bookingNotes: this.bookingNotes,
+    summaryHighlights: this.summaryHighlights,
+    suitableFor: this.suitableFor,
+    signatureDishes: this.signatureDishes,
+    amenities: this.amenities,
+    policyRules: this.policyRules,
     approvalStatus: this.approvalStatus,
     stats: this.stats,
     active: this.active,
