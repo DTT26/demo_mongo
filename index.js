@@ -73,7 +73,8 @@ apiRouter.use('/owner', require('./src/routes/owner.table.routes'));
 apiRouter.use('/upload', require('./src/routes/upload.routes'));
 apiRouter.use('/chat', require('./src/routes/chat.routes'));
 apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
-// apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
+apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
+apiRouter.use('/owner',       require('./src/routes/owner.booking.routes'));
 
 // Test route
 apiRouter.get('/ping', (req, res) => {

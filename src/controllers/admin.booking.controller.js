@@ -1,6 +1,7 @@
 'use strict';
 
 const Booking = require('../models/Booking');
+const bookingService = require('../services/booking.service');
 
 // ────────────────────────────────────────────────────────
 // A. Danh sách Bookings (Paginated, Search, Filter)
@@ -10,14 +11,14 @@ const getBookings = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
-    
+
     const search = (req.query.search || '').trim();
     const status = (req.query.status || '').trim();
     const fromDate = req.query.fromDate;
     const toDate = req.query.toDate;
 
     const filter = {};
-    
+
     if (status) {
       filter.status = status;
     }
@@ -104,6 +105,20 @@ const updateBookingStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Trạng thái này đã được cập nhật' });
     }
 
+    if (!bookingService.canTransitionBookingStatus(booking.status, status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Khong the chuyen trang thai tu ${booking.status} sang ${status}`,
+      });
+    }
+
+    if (status === 'cancelled' && (!note || !note.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui long cung cap ly do huy dat ban',
+      });
+    }
+
     // Logic update status
     booking.status = status;
     booking.statusHistory.push({
@@ -146,8 +161,50 @@ const updateBookingStatus = async (req, res) => {
   }
 };
 
+const getBookingStats = async (req, res) => {
+  try {
+    const counts = await Booking.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const stats = {
+      totalBookings: 0,
+      pending: 0,
+      confirmed: 0,
+      completed: 0,
+      cancelled: 0,
+      no_show: 0,
+    };
+
+    counts.forEach((item) => {
+      if (stats[item._id] !== undefined) {
+        stats[item._id] = item.count;
+        stats.totalBookings += item.count;
+      }
+    });
+
+    stats.completionRate = stats.totalBookings > 0
+      ? Number(((stats.completed / stats.totalBookings) * 100).toFixed(1))
+      : 0;
+    stats.cancellationRate = stats.totalBookings > 0
+      ? Number(((stats.cancelled / stats.totalBookings) * 100).toFixed(1))
+      : 0;
+
+    return res.json({ success: true, data: stats });
+  } catch (error) {
+    console.error('❌ [Admin/GetBookingStats] Lỗi:', error.message);
+    return res.status(500).json({ success: false, message: 'Khong the tai thong ke dat ban' });
+  }
+};
+
 module.exports = {
   getBookings,
+  getBookingStats,
   getBookingById,
   updateBookingStatus,
 };
