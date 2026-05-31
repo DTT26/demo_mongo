@@ -421,6 +421,129 @@ const buildRestaurantUnsuspendedTemplate = ({ fullName, restaurantName }) =>
     </p>
   `);
 
+const formatBookingDateTime = (booking) => {
+  const date = booking?.bookingDate
+    ? new Date(booking.bookingDate).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
+    : '';
+  return `${date} ${booking?.bookingTime || ''}`.trim();
+};
+
+const getBookingRecipient = (customer, booking) => ({
+  email: booking?.customerEmail || customer?.email,
+  fullName: booking?.customerName || customer?.fullName || customer?.username || 'khach hang',
+});
+
+const getRestaurantName = (restaurant) => restaurant?.name || 'nha hang';
+
+const buildBookingEmailTemplate = ({ title, fullName, restaurantName, booking, message, reason }) =>
+  baseLayout(`
+    <h1 style="margin:0 0 8px;font-family:Georgia,serif;font-size:24px;font-weight:300;color:#2c2c2c;">
+      ${title}
+    </h1>
+    <p style="margin:0 0 20px;font-size:14px;color:#b6ab9c;">BookEat</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#444;line-height:1.6;">
+      Xin chao <strong>${fullName}</strong>,
+    </p>
+    <p style="margin:0 0 20px;font-size:14px;color:#666;line-height:1.7;">
+      ${message}
+    </p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e8e0d4;margin:0 0 20px;">
+      ${[
+        ['Nha hang', restaurantName],
+        ['Thoi gian', formatBookingDateTime(booking)],
+        ['So khach', booking?.numberOfGuests || ''],
+        ['Ban', booking?.tableNumbers?.length ? booking.tableNumbers.join(', ') : 'Nha hang sap xep'],
+        ['Ma booking', booking?._id?.toString?.() || ''],
+      ].map(([label, value], i) => `
+        <tr style="background:${i % 2 === 0 ? '#faf8f5' : '#ffffff'}">
+          <td style="padding:10px 16px;font-size:13px;color:#888;width:40%;border-bottom:1px solid #f0ece6;">${label}</td>
+          <td style="padding:10px 16px;font-size:13px;color:#2c2c2c;border-bottom:1px solid #f0ece6;"><strong>${value}</strong></td>
+        </tr>
+      `).join('')}
+    </table>
+    ${reason ? `
+      <p style="margin:0 0 20px;font-size:14px;color:#7f1d1d;line-height:1.7;background:#fef2f2;border-left:4px solid #ef4444;padding:12px 16px;">
+        Ly do: ${reason}
+      </p>
+    ` : ''}
+    <p style="margin:0;font-size:13px;color:#aaa;border-top:1px solid #f0ece6;padding-top:16px;">
+      Cam on ban da su dung BookEat.
+    </p>
+  `);
+
+const sendBookingCreatedEmail = async (customer, restaurant, booking) => {
+  const recipient = getBookingRecipient(customer, booking);
+  if (!recipient.email) return { skipped: true, reason: 'missing-recipient' };
+
+  const restaurantName = getRestaurantName(restaurant);
+  const subject = `BookEat - Da nhan yeu cau dat ban tai ${restaurantName}`;
+  const message = `BookEat da nhan yeu cau dat ban cua ban tai ${restaurantName}. Nha hang se xac nhan trong thoi gian som nhat.`;
+  const html = buildBookingEmailTemplate({
+    title: 'Da nhan yeu cau dat ban',
+    fullName: recipient.fullName,
+    restaurantName,
+    booking,
+    message,
+  });
+  const text = `${message}\nThoi gian: ${formatBookingDateTime(booking)}\nSo khach: ${booking?.numberOfGuests || ''}`;
+  return sendMail({ to: recipient.email, subject, html, text });
+};
+
+const sendBookingConfirmedEmail = async (customer, restaurant, booking) => {
+  const recipient = getBookingRecipient(customer, booking);
+  if (!recipient.email) return { skipped: true, reason: 'missing-recipient' };
+
+  const restaurantName = getRestaurantName(restaurant);
+  const subject = `BookEat - Dat ban da duoc xac nhan tai ${restaurantName}`;
+  const message = `Don dat ban cua ban tai ${restaurantName} da duoc xac nhan.`;
+  const html = buildBookingEmailTemplate({
+    title: 'Dat ban da duoc xac nhan',
+    fullName: recipient.fullName,
+    restaurantName,
+    booking,
+    message,
+  });
+  const text = `${message}\nThoi gian: ${formatBookingDateTime(booking)}\nSo khach: ${booking?.numberOfGuests || ''}`;
+  return sendMail({ to: recipient.email, subject, html, text });
+};
+
+const sendBookingCancelledEmail = async (customer, restaurant, booking, reason) => {
+  const recipient = getBookingRecipient(customer, booking);
+  if (!recipient.email) return { skipped: true, reason: 'missing-recipient' };
+
+  const restaurantName = getRestaurantName(restaurant);
+  const subject = `BookEat - Dat ban da bi huy`;
+  const message = `Don dat ban cua ban tai ${restaurantName} da bi huy.`;
+  const html = buildBookingEmailTemplate({
+    title: 'Dat ban da bi huy',
+    fullName: recipient.fullName,
+    restaurantName,
+    booking,
+    message,
+    reason,
+  });
+  const text = `${message}\n${reason ? `Ly do: ${reason}\n` : ''}Thoi gian: ${formatBookingDateTime(booking)}`;
+  return sendMail({ to: recipient.email, subject, html, text });
+};
+
+const sendBookingReminderEmail = async (customer, restaurant, booking) => {
+  const recipient = getBookingRecipient(customer, booking);
+  if (!recipient.email) return { skipped: true, reason: 'missing-recipient' };
+
+  const restaurantName = getRestaurantName(restaurant);
+  const subject = `BookEat - Nhac lich dat ban tai ${restaurantName}`;
+  const message = `BookEat nhac ban ve lich dat ban sap toi tai ${restaurantName}.`;
+  const html = buildBookingEmailTemplate({
+    title: 'Nhac lich dat ban',
+    fullName: recipient.fullName,
+    restaurantName,
+    booking,
+    message,
+  });
+  const text = `${message}\nThoi gian: ${formatBookingDateTime(booking)}\nSo khach: ${booking?.numberOfGuests || ''}`;
+  return sendMail({ to: recipient.email, subject, html, text });
+};
+
 module.exports = {
   verifySmtp,
   sendVerificationEmail,
@@ -431,4 +554,8 @@ module.exports = {
   sendRestaurantRejectedEmail,
   sendRestaurantSuspendedEmail,
   sendRestaurantUnsuspendedEmail,
+  sendBookingCreatedEmail,
+  sendBookingConfirmedEmail,
+  sendBookingCancelledEmail,
+  sendBookingReminderEmail,
 };

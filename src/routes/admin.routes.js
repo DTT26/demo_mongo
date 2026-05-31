@@ -42,6 +42,7 @@ router.get(   '/restaurants/:id/activity-logs', adminRestaurantController.getAct
 // ─── Bookings Management ───
 const adminBookingController = require('../controllers/admin.booking.controller');
 router.get(   '/bookings',            adminBookingController.getBookings);
+router.get(   '/bookings/stats',      adminBookingController.getBookingStats);
 router.get(   '/bookings/:id',        adminBookingController.getBookingById);
 router.patch( '/bookings/:id/status', adminBookingController.updateBookingStatus);
 
