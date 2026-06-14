@@ -46,4 +46,25 @@ router.get(   '/bookings/stats',      adminBookingController.getBookingStats);
 router.get(   '/bookings/:id',        adminBookingController.getBookingById);
 router.patch( '/bookings/:id/status', adminBookingController.updateBookingStatus);
 
+// ─── Payments & Revenue Management ───
+const adminPaymentController = require('../controllers/admin.payment.controller');
+router.get(   '/payments',           adminPaymentController.getAllPayments);
+router.get(   '/transactions',       adminPaymentController.getAllTransactions);
+router.get(   '/revenue',            adminPaymentController.getRevenue);
+router.get(   '/webhook-logs',       adminPaymentController.getWebhookLogs);
+
+// ─── Refund Management ───
+const refundController = require('../controllers/refund.controller');
+router.get(   '/refunds',            refundController.getAllRefunds);
+router.patch( '/refunds/:id/approve', refundController.approveRefund);
+router.patch( '/refunds/:id/reject',  refundController.rejectRefund);
+router.post(  '/refunds/:id/process', refundController.processRefund);
+
+// Waitlist Management
+const adminWaitlistController = require('../controllers/admin.waitlist.controller');
+router.get(   '/waitlists',            adminWaitlistController.getWaitlists);
+router.get(   '/waitlists/stats',      adminWaitlistController.getStats);
+router.get(   '/waitlists/:id',        adminWaitlistController.getWaitlistById);
+router.patch( '/waitlists/:id/status', adminWaitlistController.updateWaitlistStatus);
+
 module.exports = router;

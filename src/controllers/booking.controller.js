@@ -105,12 +105,27 @@ const createBooking = async (req, res) => {
       }
     }
 
-    // 5. Tính toán giảm giá từ voucher (mocking vì chưa có model Voucher)
+    // 4.5 Tính toán tiền đặt cọc gốc của booking dựa trên các bàn được gán
+    let depositAmount = 0;
+    if (assignedTables.length > 0) {
+      const tables = await RestaurantTable.find({
+        restaurantId,
+        tableNumber: { $in: assignedTables }
+      });
+      depositAmount = tables.reduce((sum, t) => sum + (t.depositAmount || 0), 0);
+    }
+
+    // 5. Tính toán giảm giá từ voucher thực tế
     let discountAmount = 0;
+    let voucherId = null;
     if (voucherCode) {
-      // Tạm thời mock voucher
-      if (voucherCode.toUpperCase() === 'DISCOUNT10') {
-        discountAmount = 50000; // Giảm 50,000 đ
+      const voucherService = require('../services/voucher.service');
+      const valResult = await voucherService.validateVoucher(voucherCode, restaurantId, customerId, depositAmount);
+      if (valResult.valid) {
+        discountAmount = valResult.discountAmount;
+        voucherId = valResult.voucher._id;
+      } else {
+        return res.status(400).json({ success: false, message: `Mã giảm giá không hợp lệ: ${valResult.reason}` });
       }
     }
 
@@ -128,7 +143,9 @@ const createBooking = async (req, res) => {
       specialRequests: specialRequests || null,
       occasion: occasion || null,
       tableNumbers: assignedTables,
+      depositAmount,
       discountAmount,
+      voucherId,
       status: 'pending',
       statusHistory: [
         {

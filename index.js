@@ -70,11 +70,19 @@ apiRouter.use('/admin', require('./src/routes/admin.routes'));
 apiRouter.use('/owner', require('./src/routes/owner.routes'));
 apiRouter.use('/owner', require('./src/routes/owner.menu.routes'));
 apiRouter.use('/owner', require('./src/routes/owner.table.routes'));
+apiRouter.use('/owner', require('./src/routes/owner.service.routes'));
+apiRouter.use('/owner', require('./src/routes/owner.waitlist.routes'));
 apiRouter.use('/upload', require('./src/routes/upload.routes'));
 apiRouter.use('/chat', require('./src/routes/chat.routes'));
 apiRouter.use('/restaurants', require('./src/routes/restaurant.routes'));
 apiRouter.use('/bookings',    require('./src/routes/booking.routes'));
+apiRouter.use('/waitlists',   require('./src/routes/waitlist.routes'));
 apiRouter.use('/owner',       require('./src/routes/owner.booking.routes'));
+apiRouter.use('/owner',       require('./src/routes/owner.billing.routes'));
+apiRouter.use('/payments',    require('./src/routes/payment.routes'));
+apiRouter.use('/webhooks',    require('./src/routes/webhook.routes'));
+apiRouter.use('/refunds',     require('./src/routes/refund.routes'));
+apiRouter.use('/vouchers',    require('./src/routes/voucher.routes'));
 
 // Test route
 apiRouter.get('/ping', (req, res) => {
@@ -108,4 +116,16 @@ server.listen(PORT, () => {
   console.log(`🚀 BookEat API running at: http://localhost:${PORT}`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log(`📡 API base: http://localhost:${PORT}/api/v1`);
+
+  // Validate PayOS config
+  const { validatePayosConfig } = require('./src/config/payos.config');
+  validatePayosConfig();
+
+  // Start subscription expiry cron job
+  const { startSubscriptionExpiryJob } = require('./src/services/subscription.service');
+  startSubscriptionExpiryJob();
+
+  // Start waitlist expiry cron job
+  const { startWaitlistExpiryJob } = require('./src/services/waitlist-expiry.service');
+  startWaitlistExpiryJob(io);
 });
