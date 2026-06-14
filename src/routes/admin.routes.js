@@ -60,4 +60,11 @@ router.patch( '/refunds/:id/approve', refundController.approveRefund);
 router.patch( '/refunds/:id/reject',  refundController.rejectRefund);
 router.post(  '/refunds/:id/process', refundController.processRefund);
 
+// Waitlist Management
+const adminWaitlistController = require('../controllers/admin.waitlist.controller');
+router.get(   '/waitlists',            adminWaitlistController.getWaitlists);
+router.get(   '/waitlists/stats',      adminWaitlistController.getStats);
+router.get(   '/waitlists/:id',        adminWaitlistController.getWaitlistById);
+router.patch( '/waitlists/:id/status', adminWaitlistController.updateWaitlistStatus);
+
 module.exports = router;

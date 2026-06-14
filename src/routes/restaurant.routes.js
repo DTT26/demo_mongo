@@ -5,6 +5,7 @@ const router = express.Router();
 const restaurantController = require('../controllers/restaurant.controller');
 const menuService = require('../services/menu.service');
 const tableService = require('../services/table.service');
+const restaurantService = require('../services/restaurant-service.service');
 const Restaurant = require('../models/Restaurant');
 
 // Public route to get cuisine types
@@ -58,6 +59,20 @@ router.get('/:restaurantId/tables', async (req, res) => {
   } catch (error) {
     console.error('❌ Error fetching public tables:', error);
     return res.status(500).json({ success: false, message: 'Lỗi hệ thống.' });
+  }
+});
+
+// Public Services
+router.get('/:restaurantId/services', async (req, res) => {
+  try {
+    const services = await restaurantService.getPublicServices(req.params.restaurantId, req.query);
+    return res.status(200).json({ success: true, data: { services } });
+  } catch (error) {
+    console.error('Error fetching public services:', error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Loi he thong.',
+    });
   }
 });
 

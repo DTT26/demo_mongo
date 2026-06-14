@@ -53,9 +53,45 @@ exports.createPayment = async (req, res) => {
       if (booking.depositPaid) {
         return res.status(400).json({ success: false, message: 'Booking này đã được thanh toán đặt cọc.' });
       }
-      amount = booking.depositAmount || 0;
+      amount = (booking.depositAmount || 0) - (booking.discountAmount || 0);
+      amount = Math.max(0, amount);
       if (amount <= 0) {
-        return res.status(400).json({ success: false, message: 'Booking này không yêu cầu đặt cọc.' });
+        // Miễn cọc do giảm giá voucher lớn hơn hoặc bằng tiền cọc
+        booking.depositPaid = true;
+        booking.depositPaidAt = new Date();
+        booking.status = 'confirmed';
+        booking.statusHistory.push({
+          status: 'confirmed',
+          changedAt: new Date(),
+          note: 'Áp dụng mã giảm giá, miễn cọc hoàn toàn',
+        });
+        await booking.save();
+
+        if (booking.voucherId) {
+          try {
+            const voucherService = require('../services/voucher.service');
+            await voucherService.redeemVoucher(
+              booking.voucherId.code,
+              booking.restaurantId?._id || booking.restaurantId,
+              booking.customerId,
+              booking.depositAmount,
+              booking._id,
+              null
+            );
+          } catch (e) {
+            console.error('Lỗi redeem voucher miễn cọc:', e.message);
+          }
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: 'Đặt cọc đã được xác nhận miễn phí nhờ mã giảm giá.',
+          data: {
+            status: 'paid',
+            amount: 0,
+            bookingId: booking._id,
+          }
+        });
       }
       description = `Đặt cọc bàn #${booking._id.toString().slice(-6).toUpperCase()}`;
       restaurantId = booking.restaurantId?._id || booking.restaurantId;
@@ -326,19 +362,37 @@ exports.cancelPayment = async (req, res) => {
 // ─── Xử lý khi thanh toán thành công ───
 async function _processPaymentSuccess(payment) {
   if (payment.targetType === 'booking') {
-    await Booking.findByIdAndUpdate(payment.targetId, {
-      depositPaid: true,
-      depositPaidAt: new Date(),
-      paymentId: payment._id,
-      status: 'confirmed',
-      $push: {
-        statusHistory: {
-          status: 'confirmed',
-          changedAt: new Date(),
-          note: 'Đã thanh toán đặt cọc qua PayOS',
-        },
-      },
-    });
+    const booking = await Booking.findById(payment.targetId).populate('voucherId');
+    if (booking) {
+      booking.depositPaid = true;
+      booking.depositPaidAt = new Date();
+      booking.paymentId = payment._id;
+      booking.status = 'confirmed';
+      booking.statusHistory.push({
+        status: 'confirmed',
+        changedAt: new Date(),
+        note: 'Đã thanh toán đặt cọc qua PayOS',
+      });
+      await booking.save();
+
+      // Redeem voucher khi thanh toán thành công
+      if (booking.voucherId) {
+        try {
+          const voucherService = require('../services/voucher.service');
+          await voucherService.redeemVoucher(
+            booking.voucherId.code,
+            booking.restaurantId,
+            booking.customerId,
+            booking.depositAmount, // Số tiền gốc trước giảm
+            booking._id,
+            payment._id
+          );
+          console.log(`✅ Voucher ${booking.voucherId.code} redeemed successfully for booking ${booking._id}`);
+        } catch (voucherErr) {
+          console.error(`❌ Lỗi redeem voucher khi thanh toán: ${voucherErr.message}`);
+        }
+      }
+    }
     console.log(`✅ Booking ${payment.targetId} → confirmed (deposit paid)`);
 
   } else if (payment.targetType === 'subscription') {
