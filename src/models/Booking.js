@@ -127,6 +127,12 @@ const bookingSchema = new mongoose.Schema(
       ref: 'Payment',
       default: null,
     },
+    sourceWaitlistId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Waitlist',
+      default: null,
+      index: true,
+    },
 
     // ─── Confirmation ───
     confirmedAt: {
@@ -248,6 +254,7 @@ bookingSchema.methods.toPublicJSON = function () {
     depositAmount: this.depositAmount,
     depositPaid: this.depositPaid,
     discountAmount: this.discountAmount,
+    sourceWaitlistId: this.sourceWaitlistId,
     tableNumbers: this.tableNumbers,
     reviewed: this.reviewed,
     createdAt: this.createdAt,
@@ -278,6 +285,7 @@ bookingSchema.methods.toAdminJSON = function () {
     depositPaid: this.depositPaid,
     depositPaidAt: this.depositPaidAt,
     paymentId: this.paymentId,
+    sourceWaitlistId: this.sourceWaitlistId,
     confirmedAt: this.confirmedAt,
     confirmedBy: this.confirmedBy,
     completedAt: this.completedAt,
