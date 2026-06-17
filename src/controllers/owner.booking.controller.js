@@ -200,6 +200,16 @@ const cancelBooking = async (req, res) => {
 
     await booking.save();
 
+    // Reverse voucher redemption if any
+    if (booking.voucherId) {
+      try {
+        const voucherService = require('../services/voucher.service');
+        await voucherService.reverseRedemption(booking._id, reason || 'Nhà hàng hủy đặt bàn', req.user);
+      } catch (reverseErr) {
+        console.error('❌ Lỗi hoàn nguyên voucher khi nhà hàng hủy đặt bàn:', reverseErr.message);
+      }
+    }
+
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');
     emitBookingEvent(io, `user:${booking.customerId.toString()}`, 'booking:cancelled', {

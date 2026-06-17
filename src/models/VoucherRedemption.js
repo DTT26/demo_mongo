@@ -18,7 +18,6 @@ const voucherRedemptionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Booking',
       required: [true, 'Booking ID là bắt buộc'],
-      index: true,
     },
     paymentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -40,6 +39,24 @@ const voucherRedemptionSchema = new mongoose.Schema(
       required: [true, 'Số tiền sau giảm giá là bắt buộc'],
       min: 0,
     },
+    channel: {
+      type: String,
+      enum: ['booking', 'direct'],
+      default: 'booking',
+    },
+    status: {
+      type: String,
+      enum: ['completed', 'reversed'],
+      default: 'completed',
+    },
+    reversedAt: {
+      type: Date,
+      default: null,
+    },
+    reversedReason: {
+      type: String,
+      default: null,
+    },
     usedAt: {
       type: Date,
       default: Date.now,
@@ -49,5 +66,8 @@ const voucherRedemptionSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+voucherRedemptionSchema.index({ bookingId: 1 });
+voucherRedemptionSchema.index({ status: 1, usedAt: 1 });
 
 module.exports = mongoose.model('VoucherRedemption', voucherRedemptionSchema);
