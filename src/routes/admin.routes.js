@@ -60,6 +60,13 @@ router.patch( '/refunds/:id/approve', refundController.approveRefund);
 router.patch( '/refunds/:id/reject',  refundController.rejectRefund);
 router.post(  '/refunds/:id/process', refundController.processRefund);
 
+// ─── Withdrawal Requests Management ───
+const adminWithdrawalController = require('../controllers/admin.withdrawal.controller');
+router.get(   '/withdrawals',              adminWithdrawalController.getAllWithdrawals);
+router.patch( '/withdrawals/:id/approve',  adminWithdrawalController.approveWithdrawal);
+router.patch( '/withdrawals/:id/reject',   adminWithdrawalController.rejectWithdrawal);
+router.patch( '/withdrawals/:id/complete', adminWithdrawalController.completeWithdrawal);
+
 // Waitlist Management
 const adminWaitlistController = require('../controllers/admin.waitlist.controller');
 router.get(   '/waitlists',            adminWaitlistController.getWaitlists);
