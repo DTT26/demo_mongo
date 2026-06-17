@@ -83,6 +83,7 @@ apiRouter.use('/payments',    require('./src/routes/payment.routes'));
 apiRouter.use('/webhooks',    require('./src/routes/webhook.routes'));
 apiRouter.use('/refunds',     require('./src/routes/refund.routes'));
 apiRouter.use('/vouchers',    require('./src/routes/voucher.routes'));
+apiRouter.use('/reviews',     require('./src/routes/review.routes'));
 
 // Test route
 apiRouter.get('/ping', (req, res) => {
