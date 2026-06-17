@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Restaurant = require('../models/Restaurant');
 const { verifyJwtToken } = require('../utils/jwt');
 const chatService = require('../services/chat.service');
+const notificationService = require('../services/notification.service');
 const { getConversationRooms, getMessageRooms } = require('./chat.rooms');
 
 const normalizeToken = (token) => {
@@ -94,6 +95,8 @@ const registerChatSocket = (io) => {
           io.to(messageRooms).emit('receive_message', result.message);
         }
         emitConversationUpdated(io, result.conversation);
+        notificationService.notifyChatMessage(io, { result, sender: user })
+          .catch((error) => console.warn(`[SocketChatNotification/message] ${error.message}`));
         callback?.({ success: true, data: result });
       } catch (error) {
         callback?.({ success: false, message: error.message });

@@ -3,6 +3,15 @@
 const Voucher = require('../models/Voucher');
 const Restaurant = require('../models/Restaurant');
 const voucherService = require('../services/voucher.service');
+const notificationService = require('../services/notification.service');
+
+const isOwnerRole = (role) => role === 'restaurant_owner' || role === 'owner';
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[VoucherNotification/${label}] ${error.message}`);
+  });
+};
 
 // ─── POST /api/v1/vouchers/validate ───
 exports.validateVoucherForBooking = async (req, res) => {
@@ -76,7 +85,7 @@ exports.createVoucher = async (req, res) => {
     } = req.body;
 
     let finalRestaurantId = null;
-    if (userRole === 'owner') {
+    if (isOwnerRole(userRole)) {
       const restaurant = await Restaurant.findOne({ ownerId: userId });
       if (!restaurant) {
         return res.status(403).json({ success: false, message: 'Bạn không sở hữu nhà hàng nào để tạo voucher.' });
@@ -109,6 +118,15 @@ exports.createVoucher = async (req, res) => {
     });
 
     await voucher.save();
+    const restaurant = finalRestaurantId ? await Restaurant.findById(finalRestaurantId) : null;
+    sendNotification(
+      notificationService.notifyVoucherCreated(req.app?.get?.('io') || null, {
+        voucher,
+        restaurant,
+        createdByRole: userRole,
+      }),
+      'created'
+    );
     return res.status(201).json({ success: true, message: 'Tạo voucher thành công', data: voucher });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -128,7 +146,7 @@ exports.updateVoucher = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Voucher không tồn tại' });
     }
 
-    if (userRole === 'owner') {
+    if (isOwnerRole(userRole)) {
       const restaurant = await Restaurant.findOne({ ownerId: userId });
       if (!restaurant || (voucher.restaurantId && voucher.restaurantId.toString() !== restaurant._id.toString())) {
         return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa voucher này.' });
@@ -158,7 +176,7 @@ exports.deleteVoucher = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Voucher không tồn tại' });
     }
 
-    if (userRole === 'owner') {
+    if (isOwnerRole(userRole)) {
       const restaurant = await Restaurant.findOne({ ownerId: userId });
       if (!restaurant || (voucher.restaurantId && voucher.restaurantId.toString() !== restaurant._id.toString())) {
         return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa voucher này.' });
@@ -182,7 +200,7 @@ exports.getVoucherStats = async (req, res) => {
     const userRole = req.user.role;
 
     let restaurantId = null;
-    if (userRole === 'owner') {
+    if (isOwnerRole(userRole)) {
       const restaurant = await Restaurant.findOne({ ownerId: userId });
       if (!restaurant) {
         return res.status(403).json({ success: false, message: 'Bạn không sở hữu nhà hàng nào.' });

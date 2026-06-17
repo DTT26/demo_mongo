@@ -5,6 +5,7 @@ const Restaurant = require('../models/Restaurant');
 const RestaurantTable = require('../models/RestaurantTable');
 const bookingService = require('../services/booking.service');
 const emailService = require('../services/email.service');
+const notificationService = require('../services/notification.service');
 
 const emitBookingEvent = (io, room, event, payload) => {
   if (!io) return;
@@ -14,6 +15,12 @@ const emitBookingEvent = (io, room, event, payload) => {
 const sendBookingEmail = (promise, label) => {
   Promise.resolve(promise).catch((error) => {
     console.warn(`[BookingEmail/${label}] ${error.message}`);
+  });
+};
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[BookingNotification/${label}] ${error.message}`);
   });
 };
 
@@ -170,6 +177,10 @@ const createBooking = async (req, res) => {
       status: booking.status,
       message: 'Co dat ban moi can xac nhan',
     });
+    sendNotification(
+      notificationService.notifyBookingCreated(io, { booking, restaurant, customer: req.user }),
+      'created'
+    );
     sendBookingEmail(
       emailService.sendBookingCreatedEmail(req.user, restaurant, booking),
       'created'
@@ -449,6 +460,7 @@ const cancelBooking = async (req, res) => {
 
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');
+    const restaurant = await Restaurant.findById(booking.restaurantId);
     emitBookingEvent(io, `restaurant:${booking.restaurantId.toString()}`, 'booking:cancelled', {
       bookingId: booking._id,
       restaurantId: booking.restaurantId,
@@ -456,6 +468,16 @@ const cancelBooking = async (req, res) => {
       cancelledBy: 'customer',
       reason: booking.cancellationReason,
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant,
+        status: 'cancelled',
+        reason: booking.cancellationReason,
+        actorRole: 'customer',
+      }),
+      'cancelled'
+    );
     sendBookingEmail(
       emailService.sendBookingCancelledEmail(req.user, null, booking, booking.cancellationReason),
       'cancelled'
