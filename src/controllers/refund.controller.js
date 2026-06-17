@@ -5,6 +5,13 @@ const Refund = require('../models/Refund');
 const Payment = require('../models/Payment');
 const Transaction = require('../models/Transaction');
 const Booking = require('../models/Booking');
+const notificationService = require('../services/notification.service');
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[RefundNotification/${label}] ${error.message}`);
+  });
+};
 
 // ─── POST /api/v1/refunds/request ───
 exports.createRefundRequest = async (req, res) => {
@@ -74,6 +81,10 @@ exports.createRefundRequest = async (req, res) => {
         io.emit('new_refund_request', { refundId: refund._id, amount: refund.amount });
       }
     } catch (e) {}
+    sendNotification(
+      notificationService.notifyRefundRequested(req.app?.get?.('io') || null, { refund, payment }),
+      'requested'
+    );
 
     return res.status(201).json({ success: true, message: 'Yêu cầu hoàn tiền đã được gửi.', data: refund });
   } catch (error) {
@@ -126,6 +137,10 @@ exports.approveRefund = async (req, res) => {
     refund.approvedBy = req.user._id;
     refund.adminNote = req.body.adminNote || 'Đã duyệt';
     await refund.save();
+    sendNotification(
+      notificationService.notifyRefundStatus(req.app?.get?.('io') || null, { refund, status: 'approved' }),
+      'approved'
+    );
 
     return res.status(200).json({ success: true, message: 'Đã duyệt yêu cầu hoàn tiền.', data: refund });
   } catch (error) {
@@ -146,6 +161,10 @@ exports.rejectRefund = async (req, res) => {
     refund.approvedBy = req.user._id;
     refund.adminNote = req.body.adminNote || 'Từ chối';
     await refund.save();
+    sendNotification(
+      notificationService.notifyRefundStatus(req.app?.get?.('io') || null, { refund, status: 'rejected' }),
+      'rejected'
+    );
 
     return res.status(200).json({ success: true, message: 'Đã từ chối yêu cầu hoàn tiền.', data: refund });
   } catch (error) {
@@ -171,6 +190,10 @@ exports.processRefund = async (req, res) => {
     refund.gatewayRefundId = gatewayRefundId || null;
     refund.refundedAt = new Date();
     await refund.save();
+    sendNotification(
+      notificationService.notifyRefundStatus(req.app?.get?.('io') || null, { refund, status: 'refunded' }),
+      'refunded'
+    );
 
     // Cập nhật payment
     const payment = await Payment.findById(refund.paymentId);

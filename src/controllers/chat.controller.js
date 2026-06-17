@@ -2,6 +2,7 @@
 
 const multer = require('multer');
 const chatService = require('../services/chat.service');
+const notificationService = require('../services/notification.service');
 const { getConversationRooms, getMessageRooms } = require('../socket/chat.rooms');
 const {
   MAX_CHAT_IMAGE_SIZE,
@@ -33,6 +34,12 @@ const sendError = (res, error) => {
   return res.status(error.status || 500).json({
     success: false,
     message: error.message || 'Loi he thong chat',
+  });
+};
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[ChatNotification/${label}] ${error.message}`);
   });
 };
 
@@ -121,6 +128,10 @@ exports.sendMessage = async (req, res) => {
         messageId: result.message.id,
         readBy: req.user._id.toString(),
       });
+      sendNotification(
+        notificationService.notifyChatMessage(io, { result, sender: req.user }),
+        'message'
+      );
     }
 
     return res.status(201).json({ success: true, data: result });

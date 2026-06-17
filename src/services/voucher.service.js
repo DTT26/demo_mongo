@@ -231,14 +231,20 @@ const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) =
   // Tìm các voucher active của riêng nhà hàng này HOẶC voucher Global (restaurantId = null)
   const vouchers = await Voucher.find({
     status: 'active',
-    $or: [
-      { restaurantId: restaurantId },
-      { restaurantId: null }
-    ],
     startDate: { $lte: now },
-    $or: [
-      { endDate: null },
-      { endDate: { $gte: now } }
+    $and: [
+      {
+        $or: [
+          { restaurantId: restaurantId },
+          { restaurantId: null },
+        ],
+      },
+      {
+        $or: [
+          { endDate: null },
+          { endDate: { $gte: now } },
+        ],
+      },
     ]
   }).sort({ createdAt: -1 });
 

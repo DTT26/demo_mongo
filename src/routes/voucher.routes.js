@@ -15,15 +15,15 @@ router.post('/save', protect, restrictTo('customer'), voucherCtrl.saveVoucher);
 router.get('/my-vouchers', protect, restrictTo('customer'), voucherCtrl.getMyVouchers);
 
 // ─── Owner Routes (Yêu cầu đăng nhập + role owner) ───
-router.get('/owner/list', protect, restrictTo('owner'), voucherCtrl.getOwnerVouchers);
+router.get('/owner/list', protect, restrictTo('restaurant_owner'), voucherCtrl.getOwnerVouchers);
 
 // ─── Admin Routes (Yêu cầu đăng nhập + role admin) ───
 router.get('/admin/list', protect, restrictTo('admin'), voucherCtrl.getAdminVouchers);
 
 // ─── Shared Owner & Admin Routes (Yêu cầu đăng nhập + role owner/admin) ───
-router.post('/', protect, restrictTo('owner', 'admin'), voucherCtrl.createVoucher);
-router.put('/:id', protect, restrictTo('owner', 'admin'), voucherCtrl.updateVoucher);
-router.delete('/:id', protect, restrictTo('owner', 'admin'), voucherCtrl.deleteVoucher);
-router.get('/:id/stats', protect, restrictTo('owner', 'admin'), voucherCtrl.getVoucherStats);
+router.post('/', protect, restrictTo('restaurant_owner', 'admin'), voucherCtrl.createVoucher);
+router.put('/:id', protect, restrictTo('restaurant_owner', 'admin'), voucherCtrl.updateVoucher);
+router.delete('/:id', protect, restrictTo('restaurant_owner', 'admin'), voucherCtrl.deleteVoucher);
+router.get('/:id/stats', protect, restrictTo('restaurant_owner', 'admin'), voucherCtrl.getVoucherStats);
 
 module.exports = router;
