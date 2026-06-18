@@ -2,6 +2,13 @@
 
 const Booking = require('../models/Booking');
 const bookingService = require('../services/booking.service');
+const notificationService = require('../services/notification.service');
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[AdminBookingNotification/${label}] ${error.message}`);
+  });
+};
 
 // ────────────────────────────────────────────────────────
 // A. Danh sách Bookings (Paginated, Search, Filter)
@@ -159,6 +166,17 @@ const updateBookingStatus = async (req, res) => {
       .populate('customerId', 'fullName email phoneNumber avatarUrl')
       .populate('restaurantId', 'name address phoneNumber logo')
       .populate('confirmedBy', 'fullName email');
+
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(req.app?.get?.('io') || null, {
+        booking,
+        restaurant: updatedBooking.restaurantId,
+        status,
+        reason: note,
+        actorRole: 'admin',
+      }),
+      status
+    );
 
     return res.json({
       success: true,

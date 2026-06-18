@@ -74,15 +74,17 @@ const checkStatus = (voucher) => {
 /**
  * Checks date range of voucher
  */
-const checkDateRange = async (voucher) => {
+const checkDateRange = async (voucher, options = {}) => {
   const now = new Date();
   if (voucher.startDate && now < voucher.startDate) {
     return { valid: false, reason: 'Chương trình ưu đãi chưa bắt đầu' };
   }
   if (voucher.endDate && now > voucher.endDate) {
     // Auto update status to expired
-    voucher.status = 'expired';
-    await voucher.save();
+    if (options?.readOnly !== true) {
+      voucher.status = 'expired';
+      await voucher.save();
+    }
     return { valid: false, reason: 'Mã giảm giá đã hết hạn sử dụng' };
   }
   return { valid: true };

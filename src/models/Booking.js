@@ -133,6 +133,11 @@ const bookingSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    sourceAiPendingActionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AiPendingAction',
+      default: null,
+    },
 
     // ─── Confirmation ───
     confirmedAt: {
@@ -227,6 +232,13 @@ bookingSchema.index({ bookingDate: 1, bookingTime: 1 });
 bookingSchema.index({ customerId: 1, status: 1 });
 bookingSchema.index({ restaurantId: 1, status: 1 });
 bookingSchema.index({ createdAt: -1 });
+bookingSchema.index(
+  { sourceAiPendingActionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourceAiPendingActionId: { $type: 'objectId' } },
+  },
+);
 
 // ─── Virtual: Is Upcoming ───
 bookingSchema.virtual('isUpcoming').get(function () {

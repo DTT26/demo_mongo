@@ -48,11 +48,28 @@ const logAudit = async ({
 /**
  * 1. Kiểm tra tính hợp lệ và tính số tiền giảm của Voucher
  */
-const validateVoucher = async (code, restaurantId, customerId, orderAmount, ipAddress = null) => {
+const validateVoucher = async (code, restaurantId, customerId, orderAmount, ipAddressOrOptions = null, options = {}) => {
+  let ipAddress = null;
+  let finalOptions = options;
+
+  if (ipAddressOrOptions && typeof ipAddressOrOptions === 'object') {
+    finalOptions = ipAddressOrOptions;
+  } else if (typeof ipAddressOrOptions === 'string') {
+    ipAddress = ipAddressOrOptions;
+  }
+
+  const readOnly = finalOptions?.readOnly === true;
+
+  if (!code) {
+    return { valid: false, reason: 'Mã voucher không được để trống', discountAmount: 0 };
+  }
+
   // 1a. Check Rate Limit
-  const rateLimitResult = validationService.checkRateLimit(ipAddress, customerId);
-  if (rateLimitResult.limited) {
-    return { valid: false, reason: rateLimitResult.reason, discountAmount: 0 };
+  if (!readOnly) {
+    const rateLimitResult = validationService.checkRateLimit(ipAddress, customerId);
+    if (rateLimitResult.limited) {
+      return { valid: false, reason: rateLimitResult.reason, discountAmount: 0 };
+    }
   }
 
   // 1b. Check Existence
@@ -65,112 +82,126 @@ const validateVoucher = async (code, restaurantId, customerId, orderAmount, ipAd
   // 1c. Check Status
   const statusResult = validationService.checkStatus(voucher);
   if (!statusResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId || voucher.createdBy,
-      actorRole: customerId ? 'customer' : 'system',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: statusResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: statusResult.reason,
+      });
+    }
     return { valid: false, reason: statusResult.reason, discountAmount: 0 };
   }
 
   // 1d. Check Date Range
-  const dateResult = await validationService.checkDateRange(voucher);
+  const dateResult = await validationService.checkDateRange(voucher, finalOptions);
   if (!dateResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId || voucher.createdBy,
-      actorRole: customerId ? 'customer' : 'system',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: dateResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: dateResult.reason,
+      });
+    }
     return { valid: false, reason: dateResult.reason, discountAmount: 0 };
   }
 
-  // 1e. Check Restaurant Scope (includes city/cuisine category matching)
+  // 1e. Check Restaurant Scope
   const scopeResult = await validationService.checkRestaurantScope(voucher, restaurantId);
   if (!scopeResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId || voucher.createdBy,
-      actorRole: customerId ? 'customer' : 'system',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: scopeResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: scopeResult.reason,
+      });
+    }
     return { valid: false, reason: scopeResult.reason, discountAmount: 0 };
   }
 
   // 1f. Check Min Spend
   const spendResult = validationService.checkMinSpend(voucher, orderAmount);
   if (!spendResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId || voucher.createdBy,
-      actorRole: customerId ? 'customer' : 'system',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: spendResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: spendResult.reason,
+      });
+    }
     return { valid: false, reason: spendResult.reason, discountAmount: 0 };
   }
 
   // 1g. Check Global Limit
   const globalResult = await validationService.checkGlobalLimit(voucher);
   if (!globalResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId || voucher.createdBy,
-      actorRole: customerId ? 'customer' : 'system',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: globalResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: globalResult.reason,
+      });
+    }
     return { valid: false, reason: globalResult.reason, discountAmount: 0 };
   }
 
   // 1h. Check Per User Limit
   const userResult = await validationService.checkPerUserLimit(voucher, customerId);
   if (!userResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId,
-      actorRole: 'customer',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: userResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId,
+        actorRole: 'customer',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: userResult.reason,
+      });
+    }
     return { valid: false, reason: userResult.reason, discountAmount: 0 };
   }
 
   // 1i. Check Customer Segment
   const segmentResult = await validationService.checkCustomerSegment(voucher, customerId);
   if (!segmentResult.valid) {
-    await logAudit({
-      voucherId: voucher._id,
-      action: 'validate',
-      actorId: customerId,
-      actorRole: 'customer',
-      customerId,
-      ipAddress,
-      result: 'failure',
-      errorReason: segmentResult.reason,
-    });
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId,
+        actorRole: 'customer',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: segmentResult.reason,
+      });
+    }
     return { valid: false, reason: segmentResult.reason, discountAmount: 0 };
   }
 
@@ -190,16 +221,18 @@ const validateVoucher = async (code, restaurantId, customerId, orderAmount, ipAd
   discountAmount = Math.max(0, discountAmount);
 
   // Success audit log
-  await logAudit({
-    voucherId: voucher._id,
-    action: 'validate',
-    actorId: customerId || voucher.createdBy,
-    actorRole: customerId ? 'customer' : 'system',
-    customerId,
-    ipAddress,
-    result: 'success',
-    metadata: { orderAmount, discountAmount },
-  });
+  if (!readOnly) {
+    await logAudit({
+      voucherId: voucher._id,
+      action: 'validate',
+      actorId: customerId || voucher.createdBy,
+      actorRole: customerId ? 'customer' : 'system',
+      customerId,
+      ipAddress,
+      result: 'success',
+      metadata: { orderAmount, discountAmount },
+    });
+  }
 
   return { valid: true, reason: null, discountAmount, voucher };
 };
@@ -568,15 +601,21 @@ const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) =
   // Tìm các voucher active của riêng nhà hàng này HOẶC voucher Global (restaurantId = null)
   const vouchers = await Voucher.find({
     status: 'active',
-    $or: [
-      { restaurantId: restaurantId },
-      { restaurantId: null },
-    ],
     startDate: { $lte: now },
-    $or: [
-      { endDate: null },
-      { endDate: { $gte: now } },
-    ],
+    $and: [
+      {
+        $or: [
+          { restaurantId: restaurantId },
+          { restaurantId: null },
+        ],
+      },
+      {
+        $or: [
+          { endDate: null },
+          { endDate: { $gte: now } },
+        ],
+      },
+    ]
   }).sort({ createdAt: -1 });
 
   // Nếu truyền customerId, trả về thêm thông tin đã lưu hay chưa

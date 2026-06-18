@@ -7,6 +7,7 @@ const Booking = require('../models/Booking');
 const Subscription = require('../models/Subscription');
 const Restaurant = require('../models/Restaurant');
 const payosService = require('../services/payos.service');
+const notificationService = require('../services/notification.service');
 const { SUBSCRIPTION_PLANS } = require('../config/payos.config');
 
 // ─── Tạo mã orderCode duy nhất ───
@@ -306,7 +307,7 @@ exports.checkPaymentStatus = async (req, res) => {
         await payment.save();
 
         // Cập nhật entity liên quan
-        await _processPaymentSuccess(payment);
+        await _processPaymentSuccess(payment, req.app?.get?.('io') || null);
 
         // Tạo transaction
         await Transaction.create({
@@ -321,6 +322,10 @@ exports.checkPaymentStatus = async (req, res) => {
         payment.status = 'cancelled';
         payment.cancelledAt = new Date();
         await payment.save();
+        notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
+          payment,
+          status: 'failed',
+        }).catch((error) => console.warn(`[PaymentNotification/cancelled] ${error.message}`));
       }
     } catch (payosError) {
       console.error('❌ Lỗi check PayOS status:', payosError.message);
@@ -355,6 +360,10 @@ exports.cancelPayment = async (req, res) => {
     payment.status = 'cancelled';
     payment.cancelledAt = new Date();
     await payment.save();
+    notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
+      payment,
+      status: 'failed',
+    }).catch((error) => console.warn(`[PaymentNotification/user_cancelled] ${error.message}`));
 
     return res.status(200).json({ success: true, message: 'Đã hủy thanh toán.', data: payment });
   } catch (error) {
@@ -363,7 +372,7 @@ exports.cancelPayment = async (req, res) => {
 };
 
 // ─── Xử lý khi thanh toán thành công ───
-async function _processPaymentSuccess(payment) {
+async function _processPaymentSuccess(payment, io = null) {
   if (payment.targetType === 'booking') {
     const booking = await Booking.findById(payment.targetId).populate('voucherId');
     if (booking) {
@@ -398,6 +407,15 @@ async function _processPaymentSuccess(payment) {
     }
     console.log(`✅ Booking ${payment.targetId} → confirmed (deposit paid)`);
 
+    if (booking) {
+      const restaurant = await Restaurant.findById(booking.restaurantId).select('_id ownerId name');
+      notificationService.notifyPaymentStatus(io, {
+        payment,
+        booking,
+        restaurant,
+        status: 'success',
+      }).catch((error) => console.warn(`[PaymentNotification/success] ${error.message}`));
+    }
   } else if (payment.targetType === 'subscription') {
     const plan = payment.metadata?.toPlan || payment.metadata?.plan;
     const planInfo = SUBSCRIPTION_PLANS[plan];
@@ -423,6 +441,13 @@ async function _processPaymentSuccess(payment) {
       paymentId: payment._id,
       benefitsSnapshot: planInfo.benefits,
     });
+
+    const restaurant = await Restaurant.findById(payment.targetId).select('_id ownerId name');
+    notificationService.notifyPaymentStatus(io, {
+      payment,
+      restaurant,
+      status: 'success',
+    }).catch((error) => console.warn(`[PaymentNotification/subscription] ${error.message}`));
 
     console.log(`✅ Subscription ${plan} activated for restaurant ${payment.targetId}, expires ${expiredAt}`);
   }

@@ -4,6 +4,15 @@ const Voucher = require('../models/Voucher');
 const CustomerVoucher = require('../models/CustomerVoucher');
 const VoucherRedemption = require('../models/VoucherRedemption');
 const voucherService = require('../services/voucher.service');
+const notificationService = require('../services/notification.service');
+
+const isOwnerRole = (role) => role === 'restaurant_owner' || role === 'owner';
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[VoucherNotification/${label}] ${error.message}`);
+  });
+};
 
 /**
  * 1. Validate voucher code for checkout preview

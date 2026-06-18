@@ -5,6 +5,13 @@ const Restaurant = require('../models/Restaurant');
 const RestaurantTable = require('../models/RestaurantTable');
 const bookingService = require('../services/booking.service');
 const emailService = require('../services/email.service');
+const notificationService = require('../services/notification.service');
+const {
+  BookingApplicationError,
+  createBookingApplicationService,
+} = require('../services/application/booking-application.service');
+
+const bookingApplicationService = createBookingApplicationService();
 
 const emitBookingEvent = (io, room, event, payload) => {
   if (!io) return;
@@ -17,10 +24,16 @@ const sendBookingEmail = (promise, label) => {
   });
 };
 
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[BookingNotification/${label}] ${error.message}`);
+  });
+};
+
 /**
  * A. Tạo Đặt Bàn Mới (POST /api/v1/bookings)
  */
-const createBooking = async (req, res) => {
+const createBookingLegacy = async (req, res) => {
   try {
     const customerId = req.user._id;
     const {
@@ -174,6 +187,10 @@ const createBooking = async (req, res) => {
       status: booking.status,
       message: 'Co dat ban moi can xac nhan',
     });
+    sendNotification(
+      notificationService.notifyBookingCreated(io, { booking, restaurant, customer: req.user }),
+      'created'
+    );
     sendBookingEmail(
       emailService.sendBookingCreatedEmail(req.user, restaurant, booking),
       'created'
@@ -187,6 +204,44 @@ const createBooking = async (req, res) => {
   } catch (error) {
     console.error('❌ [CreateBooking] Lỗi:', error.message);
     return res.status(500).json({ success: false, message: 'Lỗi máy chủ khi tạo đặt bàn' });
+  }
+};
+
+const createBooking = async (req, res) => {
+  try {
+    const result = await bookingApplicationService.createBooking({
+      actor: {
+        userId: req.user._id,
+        user: req.user,
+      },
+      command: req.body,
+      context: {
+        customer: req.user,
+        io: req.app.get('io'),
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Đặt bàn thành công! Vui lòng chờ nhà hàng xác nhận.',
+      data: result.booking.toPublicJSON(),
+    });
+  } catch (error) {
+    if (error instanceof BookingApplicationError) {
+      const legacyStatus = [409, 422].includes(error.statusCode)
+        ? 400
+        : error.statusCode;
+      return res.status(legacyStatus).json({
+        success: false,
+        message: error.message,
+        ...(error.errors ? { errors: error.errors } : {}),
+      });
+    }
+    console.error('❌ [CreateBooking] Lỗi:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Lỗi máy chủ khi tạo đặt bàn',
+    });
   }
 };
 
@@ -463,6 +518,7 @@ const cancelBooking = async (req, res) => {
 
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');
+    const restaurant = await Restaurant.findById(booking.restaurantId);
     emitBookingEvent(io, `restaurant:${booking.restaurantId.toString()}`, 'booking:cancelled', {
       bookingId: booking._id,
       restaurantId: booking.restaurantId,
@@ -470,6 +526,16 @@ const cancelBooking = async (req, res) => {
       cancelledBy: 'customer',
       reason: booking.cancellationReason,
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant,
+        status: 'cancelled',
+        reason: booking.cancellationReason,
+        actorRole: 'customer',
+      }),
+      'cancelled'
+    );
     sendBookingEmail(
       emailService.sendBookingCancelledEmail(req.user, null, booking, booking.cancellationReason),
       'cancelled'

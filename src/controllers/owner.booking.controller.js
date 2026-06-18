@@ -5,6 +5,7 @@ const Restaurant = require('../models/Restaurant');
 const RestaurantTable = require('../models/RestaurantTable');
 const bookingService = require('../services/booking.service');
 const emailService = require('../services/email.service');
+const notificationService = require('../services/notification.service');
 
 const emitBookingEvent = (io, room, event, payload) => {
   if (!io) return;
@@ -14,6 +15,12 @@ const emitBookingEvent = (io, room, event, payload) => {
 const sendBookingEmail = (promise, label) => {
   Promise.resolve(promise).catch((error) => {
     console.warn(`[OwnerBookingEmail/${label}] ${error.message}`);
+  });
+};
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[OwnerBookingNotification/${label}] ${error.message}`);
   });
 };
 
@@ -141,6 +148,15 @@ const confirmBooking = async (req, res) => {
       status: booking.status,
       message: 'Don dat ban cua ban da duoc xac nhan',
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant: req.restaurant,
+        status: 'confirmed',
+        actorRole: 'restaurant_owner',
+      }),
+      'confirmed'
+    );
     sendBookingEmail(
       emailService.sendBookingConfirmedEmail(booking.customerId, req.restaurant, booking),
       'confirmed'
@@ -219,6 +235,16 @@ const cancelBooking = async (req, res) => {
       cancelledBy: 'restaurant',
       reason,
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant: req.restaurant,
+        status: 'cancelled',
+        reason,
+        actorRole: 'restaurant_owner',
+      }),
+      'cancelled'
+    );
     sendBookingEmail(
       emailService.sendBookingCancelledEmail(booking.customerId, req.restaurant, booking, reason),
       'cancelled'
@@ -278,12 +304,22 @@ const completeBooking = async (req, res) => {
     restaurant.stats.completedBookings += 1;
     await restaurant.save();
 
-    emitBookingEvent(req.app.get('io'), `user:${booking.customerId.toString()}`, 'booking:completed', {
+    const io = req.app.get('io');
+    emitBookingEvent(io, `user:${booking.customerId.toString()}`, 'booking:completed', {
       bookingId: booking._id,
       restaurantId: booking.restaurantId,
       status: booking.status,
       message: 'Dat ban da hoan thanh',
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant,
+        status: 'completed',
+        actorRole: 'restaurant_owner',
+      }),
+      'completed'
+    );
 
     return res.json({
       success: true,
@@ -320,12 +356,22 @@ const markNoShow = async (req, res) => {
 
     await booking.save();
 
-    emitBookingEvent(req.app.get('io'), `user:${booking.customerId.toString()}`, 'booking:no_show', {
+    const io = req.app.get('io');
+    emitBookingEvent(io, `user:${booking.customerId.toString()}`, 'booking:no_show', {
       bookingId: booking._id,
       restaurantId: booking.restaurantId,
       status: booking.status,
       message: 'Dat ban duoc danh dau no-show',
     });
+    sendNotification(
+      notificationService.notifyBookingStatusChanged(io, {
+        booking,
+        restaurant: req.restaurant,
+        status: 'no_show',
+        actorRole: 'restaurant_owner',
+      }),
+      'no_show'
+    );
 
     return res.json({
       success: true,

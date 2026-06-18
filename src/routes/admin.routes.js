@@ -60,11 +60,24 @@ router.patch( '/refunds/:id/approve', refundController.approveRefund);
 router.patch( '/refunds/:id/reject',  refundController.rejectRefund);
 router.post(  '/refunds/:id/process', refundController.processRefund);
 
+// ─── Withdrawal Requests Management ───
+const adminWithdrawalController = require('../controllers/admin.withdrawal.controller');
+router.get(   '/withdrawals',              adminWithdrawalController.getAllWithdrawals);
+router.patch( '/withdrawals/:id/approve',  adminWithdrawalController.approveWithdrawal);
+router.patch( '/withdrawals/:id/reject',   adminWithdrawalController.rejectWithdrawal);
+router.patch( '/withdrawals/:id/complete', adminWithdrawalController.completeWithdrawal);
+
 // Waitlist Management
 const adminWaitlistController = require('../controllers/admin.waitlist.controller');
 router.get(   '/waitlists',            adminWaitlistController.getWaitlists);
 router.get(   '/waitlists/stats',      adminWaitlistController.getStats);
 router.get(   '/waitlists/:id',        adminWaitlistController.getWaitlistById);
 router.patch( '/waitlists/:id/status', adminWaitlistController.updateWaitlistStatus);
+
+// ─── Reviews Management ───
+const adminReviewController = require('../controllers/admin.review.controller');
+router.get(   '/reviews/reported',     adminReviewController.getReportedReviews);
+router.put(   '/reviews/:id/hide',     adminReviewController.hideReview);
+router.put(   '/reviews/:id/restore',  adminReviewController.restoreReview);
 
 module.exports = router;
