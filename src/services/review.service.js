@@ -1,52 +1,73 @@
+'use strict';
+
 const mongoose = require('mongoose');
 const Review = require('../models/Review');
 const Restaurant = require('../models/Restaurant');
 
 /**
- * Cập nhật điểm đánh giá trung bình và tổng số đánh giá của một nhà hàng
+ * Tính toán rating summary cho nhà hàng
+ * Trả về: averageRating, totalReviews, distribution (1-5★)
  * Chỉ tính toán dựa trên các đánh giá có trạng thái 'approved'
- * @param {string} restaurantId - ID của nhà hàng cần cập nhật
  */
-async function updateRestaurantRating(restaurantId) {
-  try {
-    const stats = await Review.aggregate([
-      {
-        $match: {
-          restaurantId: new mongoose.Types.ObjectId(restaurantId),
-          status: 'approved',
-        },
+const calculateRatingSummary = async (restaurantId) => {
+  const rId = typeof restaurantId === 'string' ? new mongoose.Types.ObjectId(restaurantId) : restaurantId;
+  
+  const pipeline = [
+    { $match: { restaurantId: rId, status: 'approved' } },
+    {
+      $group: {
+        _id: null,
+        averageRating: { $avg: '$rating' },
+        totalReviews: { $sum: 1 },
+        star1: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } },
+        star2: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+        star3: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+        star4: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+        star5: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
       },
-      {
-        $group: {
-          _id: '$restaurantId',
-          averageRating: { $avg: '$rating' },
-          totalReviews: { $sum: 1 },
-        },
-      },
-    ]);
+    },
+  ];
 
-    let averageRating = 0;
-    let totalReviews = 0;
+  const results = await Review.aggregate(pipeline);
 
-    if (stats.length > 0) {
-      // Làm tròn 1 chữ số thập phân (ví dụ: 4.67 -> 4.7)
-      averageRating = Math.round(stats[0].averageRating * 10) / 10;
-      totalReviews = stats[0].totalReviews;
-    }
-
-    await Restaurant.findByIdAndUpdate(restaurantId, {
-      'stats.averageRating': averageRating,
-      'stats.totalReviews': totalReviews,
-    });
-
-    console.log(`✅ Cập nhật stats nhà hàng ${restaurantId}: ${averageRating}★, ${totalReviews} đánh giá.`);
-    return { averageRating, totalReviews };
-  } catch (error) {
-    console.error(`❌ Lỗi cập nhật stats nhà hàng ${restaurantId}:`, error.message);
-    throw error;
+  if (!results.length) {
+    return {
+      averageRating: 0,
+      totalReviews: 0,
+      distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    };
   }
-}
+
+  const data = results[0];
+  return {
+    averageRating: Math.round(data.averageRating * 10) / 10,
+    totalReviews: data.totalReviews,
+    distribution: {
+      1: data.star1,
+      2: data.star2,
+      3: data.star3,
+      4: data.star4,
+      5: data.star5,
+    },
+  };
+};
+
+/**
+ * Cập nhật averageRating + totalReviews trên Restaurant.stats
+ */
+const updateRestaurantRating = async (restaurantId) => {
+  const summary = await calculateRatingSummary(restaurantId);
+
+  await Restaurant.findByIdAndUpdate(restaurantId, {
+    'stats.averageRating': summary.averageRating,
+    'stats.totalReviews': summary.totalReviews,
+  });
+
+  console.log(`✅ Cập nhật stats nhà hàng ${restaurantId}: ${summary.averageRating}★, ${summary.totalReviews} đánh giá.`);
+  return summary;
+};
 
 module.exports = {
+  calculateRatingSummary,
   updateRestaurantRating,
 };

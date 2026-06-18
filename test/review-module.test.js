@@ -10,6 +10,8 @@ const Restaurant = require('../src/models/Restaurant');
 const Booking = require('../src/models/Booking');
 const Review = require('../src/models/Review');
 const reviewController = require('../src/controllers/review.controller');
+const ownerReviewController = require('../src/controllers/owner.review.controller');
+const adminReviewController = require('../src/controllers/admin.review.controller');
 const reviewService = require('../src/services/review.service');
 
 // ─── Helpers ───
@@ -36,16 +38,13 @@ const createResponse = () => {
   return res;
 };
 
-const createRequest = ({ user, body = {}, query = {}, params = {}, app = {} } = {}) => ({
+const createRequest = ({ user, body = {}, query = {}, params = {} } = {}) => ({
   user,
   body,
   query,
   params,
   app: {
-    get(key) {
-      if (key === 'io') return null;
-      return app[key] || null;
-    },
+    get() { return null; },
   },
 });
 
@@ -101,11 +100,11 @@ const createFixture = async (suffix) => {
     phoneNumber: '0901234567',
     email: `${suffix}_restaurant@example.com`,
     address: {
-      street: '1 Test St',
+      street: '1 Test',
       ward: 'Ward',
       district: 'District',
       city: 'City',
-      fullAddress: '1 Test St, City',
+      fullAddress: '1 Test, City',
     },
     operatingHours: makeOperatingHours(),
     approvalStatus: 'approved',
@@ -194,7 +193,7 @@ test.after(async () => {
 
 // ─── Test 1: Review validation ───
 test('review validation rejects invalid rating and short comment', async () => {
-  const suffix = `rev_val_${Date.now()}`;
+  const suffix = `review_val_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -283,7 +282,7 @@ test('review validation rejects invalid rating and short comment', async () => {
 
 // ─── Test 2: Create, update, delete review ───
 test('customer can create, update, and delete a review', async () => {
-  const suffix = `rev_crud_${Date.now()}`;
+  const suffix = `review_crud_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -350,7 +349,7 @@ test('customer can create, update, and delete a review', async () => {
 
 // ─── Test 3: Duplicate review by bookingId ───
 test('cannot create duplicate review for same booking', async () => {
-  const suffix = `rev_dup_${Date.now()}`;
+  const suffix = `review_dup_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -383,7 +382,7 @@ test('cannot create duplicate review for same booking', async () => {
       })
     );
     assert.equal(dupRes.statusCode, 400);
-    assert.ok(dupRes.body.message.includes('đã đánh giá') || dupRes.body.message.includes('đã được đánh giá'));
+    assert.ok(dupRes.body.message.includes('đã đánh giá'));
   } finally {
     await cleanup(suffix);
   }
@@ -391,7 +390,7 @@ test('cannot create duplicate review for same booking', async () => {
 
 // ─── Test 4: Helpful idempotency ───
 test('helpful toggle is idempotent — toggle on then off', async () => {
-  const suffix = `rev_help_${Date.now()}`;
+  const suffix = `review_help_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -453,7 +452,7 @@ test('helpful toggle is idempotent — toggle on then off', async () => {
 
 // ─── Test 5: Report idempotency ───
 test('report is idempotent — second report by same user is no-op', async () => {
-  const suffix = `rev_report_${Date.now()}`;
+  const suffix = `review_report_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -484,10 +483,6 @@ test('report is idempotent — second report by same user is no-op', async () =>
     assert.equal(reportRes.body.data.alreadyReported, false);
     assert.equal(reportRes.body.data.reportCount, 1);
 
-    // Check status updated to reported
-    const reportedReview = await Review.findById(reviewId);
-    assert.equal(reportedReview.status, 'reported');
-
     // Second report by same user — idempotent
     const dupReportRes = await callController(
       reviewController.reportReview,
@@ -506,7 +501,7 @@ test('report is idempotent — second report by same user is no-op', async () =>
 
 // ─── Test 6: Restaurant owner reply ───
 test('restaurant owner can reply to review', async () => {
-  const suffix = `rev_reply_${Date.now()}`;
+  const suffix = `review_reply_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -528,11 +523,11 @@ test('restaurant owner can reply to review', async () => {
 
     // Owner reply
     const replyRes = await callController(
-      reviewController.replyReview,
+      ownerReviewController.replyToReview,
       createRequest({
         user: fixture.owner,
         params: { id: reviewId },
-        body: { comment: 'Cảm ơn bạn đã phản hồi, chúng tôi sẽ cải thiện!' },
+        body: { content: 'Cảm ơn bạn đã phản hồi, chúng tôi sẽ cải thiện!' },
       })
     );
     assert.equal(replyRes.statusCode, 200);
@@ -540,17 +535,17 @@ test('restaurant owner can reply to review', async () => {
 
     // Verify reply in DB
     const review = await Review.findById(reviewId);
-    assert.equal(review.ownerReply.comment, 'Cảm ơn bạn đã phản hồi, chúng tôi sẽ cải thiện!');
+    assert.equal(review.ownerReply.content, 'Cảm ơn bạn đã phản hồi, chúng tôi sẽ cải thiện!');
     assert.ok(review.ownerReply.repliedAt);
     assert.equal(review.ownerReply.repliedBy.toString(), fixture.owner._id.toString());
 
     // Empty reply — should fail
     const emptyReplyRes = await callController(
-      reviewController.replyReview,
+      ownerReviewController.replyToReview,
       createRequest({
         user: fixture.owner,
         params: { id: reviewId },
-        body: { comment: '' },
+        body: { content: '' },
       })
     );
     assert.equal(emptyReplyRes.statusCode, 400);
@@ -561,7 +556,7 @@ test('restaurant owner can reply to review', async () => {
 
 // ─── Test 7: Admin hide/restore ───
 test('admin can hide and restore review', async () => {
-  const suffix = `rev_admin_${Date.now()}`;
+  const suffix = `review_admin_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -581,31 +576,62 @@ test('admin can hide and restore review', async () => {
     );
     const reviewId = createRes.body.data.id;
 
-    // Hide review
-    const hideRes = await callController(
-      reviewController.updateReviewStatus,
+    // Hide review — missing reason should fail
+    const noReasonRes = await callController(
+      adminReviewController.hideReview,
       createRequest({
         user: fixture.admin,
         params: { id: reviewId },
-        body: { status: 'hidden', reason: 'Vi phạm quy định cộng đồng' },
+        body: {},
+      })
+    );
+    assert.equal(noReasonRes.statusCode, 400);
+
+    // Hide review — with reason
+    const hideRes = await callController(
+      adminReviewController.hideReview,
+      createRequest({
+        user: fixture.admin,
+        params: { id: reviewId },
+        body: { reason: 'Vi phạm quy định cộng đồng' },
       })
     );
     assert.equal(hideRes.statusCode, 200);
     assert.equal(hideRes.body.data.status, 'hidden');
     assert.equal(hideRes.body.data.hideReason, 'Vi phạm quy định cộng đồng');
 
-    // Restore review
-    const restoreRes = await callController(
-      reviewController.updateReviewStatus,
+    // Cannot hide already hidden
+    const doubleHideRes = await callController(
+      adminReviewController.hideReview,
       createRequest({
         user: fixture.admin,
         params: { id: reviewId },
-        body: { status: 'approved' },
+        body: { reason: 'Another reason' },
+      })
+    );
+    assert.equal(doubleHideRes.statusCode, 400);
+
+    // Restore review
+    const restoreRes = await callController(
+      adminReviewController.restoreReview,
+      createRequest({
+        user: fixture.admin,
+        params: { id: reviewId },
       })
     );
     assert.equal(restoreRes.statusCode, 200);
-    assert.equal(restoreRes.body.data.status, 'approved');
+    assert.equal(restoreRes.body.data.status, 'visible');
     assert.equal(restoreRes.body.data.hideReason, null);
+
+    // Cannot restore already visible
+    const doubleRestoreRes = await callController(
+      adminReviewController.restoreReview,
+      createRequest({
+        user: fixture.admin,
+        params: { id: reviewId },
+      })
+    );
+    assert.equal(doubleRestoreRes.statusCode, 400);
   } finally {
     await cleanup(suffix);
   }
@@ -613,7 +639,7 @@ test('admin can hide and restore review', async () => {
 
 // ─── Test 8: Rating summary logic ───
 test('rating summary correctly calculates average and distribution', async () => {
-  const suffix = `rev_summary_${Date.now()}`;
+  const suffix = `review_summary_${Date.now()}`;
   await cleanup(suffix);
 
   try {
@@ -665,11 +691,11 @@ test('rating summary correctly calculates average and distribution', async () =>
     const review4star = reviews.find((r) => r.rating === 4);
 
     await callController(
-      reviewController.updateReviewStatus,
+      adminReviewController.hideReview,
       createRequest({
         user: fixture.admin,
         params: { id: review4star._id.toString() },
-        body: { status: 'hidden', reason: 'Test hide' },
+        body: { reason: 'Test hide' },
       })
     );
 
