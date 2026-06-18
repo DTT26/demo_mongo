@@ -27,14 +27,29 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
 }));
 
 // ─────────────────────────────────────────────
 // Kết nối MongoDB
 // ─────────────────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ MongoDB connected successfully'))
+  .then(async () => {
+    console.log('✅ MongoDB connected successfully');
+
+    if (process.env.AI_KNOWLEDGE_AUTO_SEED !== 'false') {
+      try {
+        const { seedDefaultKnowledge } = require('./src/services/ai/ai-knowledge.service');
+        const result = await seedDefaultKnowledge();
+        const upserted = result?.upsertedCount || result?.nUpserted || 0;
+        if (upserted > 0) {
+          console.log(`✅ AI knowledge seed inserted ${upserted} document(s)`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ AI knowledge seed skipped: ${error.message}`);
+      }
+    }
+  })
   .catch((err) => {
     console.error('❌ MongoDB connection error:', err.message);
     process.exit(1);
@@ -86,6 +101,7 @@ apiRouter.use('/vouchers',    require('./src/routes/voucher.routes'));
 apiRouter.use('/reviews',     require('./src/routes/review.routes'));
 apiRouter.use('/notifications', require('./src/routes/notification.routes'));
 apiRouter.use('/customer/favorites', require('./src/routes/customer.favorite.routes'));
+apiRouter.use('/ai', require('./src/routes/ai.routes'));
 
 // Test route
 apiRouter.get('/ping', (req, res) => {
