@@ -3,31 +3,36 @@ const mongoose = require('mongoose');
 const reviewSchema = new mongoose.Schema(
   {
     // ─── References ───
-    customerId: {
+    bookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Booking',
+      required: [true, 'Mã đặt bàn là bắt buộc'],
+      unique: true,
+      index: true,
+    },
+    userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'Customer ID là bắt buộc'],
+      required: [true, 'Mã người dùng là bắt buộc'],
       index: true,
     },
     restaurantId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Restaurant',
-      required: [true, 'Restaurant ID là bắt buộc'],
+      required: [true, 'Mã nhà hàng là bắt buộc'],
       index: true,
-    },
-    bookingId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Booking',
-      required: [true, 'Booking ID là bắt buộc'],
-      unique: true, // 1 review per booking
     },
 
     // ─── Review Content ───
     rating: {
       type: Number,
       required: [true, 'Điểm đánh giá là bắt buộc'],
-      min: [1, 'Điểm đánh giá tối thiểu là 1'],
-      max: [5, 'Điểm đánh giá tối đa là 5'],
+      min: [1, 'Điểm đánh giá tối thiểu là 1 sao'],
+      max: [5, 'Điểm đánh giá tối đa là 5 sao'],
+      validate: {
+        validator: Number.isInteger,
+        message: 'Điểm đánh giá phải là số nguyên',
+      },
     },
     title: {
       type: String,
@@ -44,7 +49,7 @@ const reviewSchema = new mongoose.Schema(
     },
 
     // ─── Media ───
-    mediaUrls: [{
+    images: [{
       type: String,
       trim: true,
     }],
@@ -73,8 +78,17 @@ const reviewSchema = new mongoose.Schema(
 
     // ─── Owner Reply ───
     ownerReply: {
-      content: { type: String, trim: true, default: null },
-      repliedAt: { type: Date, default: null },
+      comment: {
+        type: String,
+        trim: true,
+        minlength: [5, 'Nội dung phản hồi phải có ít nhất 5 ký tự'],
+        maxlength: [500, 'Nội dung phản hồi không được vượt quá 500 ký tự'],
+        default: null,
+      },
+      repliedAt: {
+        type: Date,
+        default: null,
+      },
       repliedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -85,8 +99,8 @@ const reviewSchema = new mongoose.Schema(
     // ─── Moderation ───
     status: {
       type: String,
-      enum: ['visible', 'hidden'],
-      default: 'visible',
+      enum: ['approved', 'reported', 'hidden'],
+      default: 'approved',
       index: true,
     },
     hiddenBy: {
@@ -111,7 +125,7 @@ const reviewSchema = new mongoose.Schema(
 
 // ─── Indexes ───
 reviewSchema.index({ restaurantId: 1, createdAt: -1 });
-reviewSchema.index({ customerId: 1, createdAt: -1 });
+reviewSchema.index({ userId: 1, createdAt: -1 });
 reviewSchema.index({ restaurantId: 1, status: 1 });
 reviewSchema.index({ reportCount: -1 });
 
@@ -119,16 +133,16 @@ reviewSchema.index({ reportCount: -1 });
 reviewSchema.methods.toPublicJSON = function () {
   return {
     id: this._id.toString(),
-    customerId: this.customerId,
+    userId: this.userId,
     restaurantId: this.restaurantId,
     bookingId: this.bookingId,
     rating: this.rating,
     title: this.title,
     comment: this.comment,
-    mediaUrls: this.mediaUrls,
+    images: this.images,
     helpfulCount: this.helpfulCount,
-    ownerReply: this.ownerReply?.content ? {
-      content: this.ownerReply.content,
+    ownerReply: this.ownerReply?.comment ? {
+      comment: this.ownerReply.comment,
       repliedAt: this.ownerReply.repliedAt,
     } : null,
     status: this.status,
@@ -141,13 +155,13 @@ reviewSchema.methods.toPublicJSON = function () {
 reviewSchema.methods.toAdminJSON = function () {
   return {
     id: this._id.toString(),
-    customerId: this.customerId,
+    userId: this.userId,
     restaurantId: this.restaurantId,
     bookingId: this.bookingId,
     rating: this.rating,
     title: this.title,
     comment: this.comment,
-    mediaUrls: this.mediaUrls,
+    images: this.images,
     helpfulUsers: this.helpfulUsers,
     helpfulCount: this.helpfulCount,
     reportedBy: this.reportedBy,

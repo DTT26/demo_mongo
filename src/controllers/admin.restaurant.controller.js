@@ -3,6 +3,13 @@
 const Restaurant = require('../models/Restaurant');
 const RestaurantActivityLog = require('../models/RestaurantActivityLog');
 const emailService = require('../services/email.service');
+const notificationService = require('../services/notification.service');
+
+const sendNotification = (promise, label) => {
+  Promise.resolve(promise).catch((error) => {
+    console.warn(`[AdminRestaurantNotification/${label}] ${error.message}`);
+  });
+};
 
 // ────────────────────────────────────────────────────────
 // A. Danh sách nhà hàng (Paginated, Search, Filter, Sort)
@@ -143,6 +150,15 @@ const approveRestaurant = async (req, res) => {
       emailService.sendRestaurantApprovedEmail(restaurant.ownerId, restaurant)
         .catch(err => console.error('⚠️ Lỗi gửi email duyệt NH:', err.message));
     }
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Nha hang da duoc duyet',
+        message: `${restaurant.name} da duoc admin duyet va hien thi tren BookEat.`,
+        action: 'approved',
+      }),
+      'approved'
+    );
 
     return res.json({
       success: true,
@@ -190,6 +206,15 @@ const rejectRestaurant = async (req, res) => {
       emailService.sendRestaurantRejectedEmail(restaurant.ownerId, restaurant, reason)
         .catch(err => console.error('⚠️ Lỗi gửi email từ chối NH:', err.message));
     }
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Ho so nha hang bi tu choi',
+        message: `${restaurant.name} bi tu choi. Ly do: ${reason.trim()}`,
+        action: 'rejected',
+      }),
+      'rejected'
+    );
 
     return res.json({
       success: true,
@@ -237,6 +262,15 @@ const suspendRestaurant = async (req, res) => {
       emailService.sendRestaurantSuspendedEmail(restaurant.ownerId, restaurant, reason)
         .catch(err => console.error('⚠️ Lỗi gửi email tạm ngưng NH:', err.message));
     }
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Nha hang bi tam ngung',
+        message: `${restaurant.name} da bi tam ngung. Ly do: ${reason.trim()}`,
+        action: 'suspended',
+      }),
+      'suspended'
+    );
 
     return res.json({
       success: true,
@@ -286,6 +320,15 @@ const unsuspendRestaurant = async (req, res) => {
       emailService.sendRestaurantUnsuspendedEmail(restaurant.ownerId, restaurant)
         .catch(err => console.error('⚠️ Lỗi gửi email gỡ tạm ngưng:', err.message));
     }
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Nha hang da hoat dong lai',
+        message: `${restaurant.name} da duoc go tam ngung va hoat dong tro lai.`,
+        action: 'unsuspended',
+      }),
+      'unsuspended'
+    );
 
     return res.json({
       success: true,
@@ -328,6 +371,15 @@ const softDeleteRestaurant = async (req, res) => {
       performedByRole: 'admin',
       reason: reason || null,
     });
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Nha hang da bi xoa',
+        message: `${restaurant.name} da bi admin xoa${reason ? `. Ly do: ${reason}` : '.'}`,
+        action: 'deleted',
+      }),
+      'deleted'
+    );
 
     return res.json({
       success: true,
@@ -368,6 +420,15 @@ const restoreRestaurant = async (req, res) => {
       performedBy: req.user._id,
       performedByRole: 'admin',
     });
+    sendNotification(
+      notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+        restaurant,
+        title: 'Nha hang da duoc khoi phuc',
+        message: `${restaurant.name} da duoc khoi phuc va hoat dong tro lai.`,
+        action: 'restored',
+      }),
+      'restored'
+    );
 
     return res.json({
       success: true,
@@ -433,6 +494,15 @@ const updateRestaurant = async (req, res) => {
         performedByRole: 'admin',
         metadata: { changes: metadataChanges },
       });
+      sendNotification(
+        notificationService.notifyRestaurantAdminAction(req.app?.get?.('io') || null, {
+          restaurant,
+          title: 'Cau hinh nha hang da thay doi',
+          message: `${restaurant.name} vua duoc admin cap nhat cau hinh.`,
+          action: 'updated',
+        }),
+        'updated'
+      );
     }
 
     return res.json({

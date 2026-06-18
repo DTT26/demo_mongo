@@ -6,6 +6,7 @@ const Transaction = require('../models/Transaction');
 const WebhookLog = require('../models/WebhookLog');
 const payosService = require('../services/payos.service');
 const { _processPaymentSuccess } = require('./payment.controller');
+const notificationService = require('../services/notification.service');
 
 // ─── POST /api/v1/webhooks/payos ───
 exports.handlePayOSWebhook = async (req, res) => {
@@ -73,7 +74,7 @@ exports.handlePayOSWebhook = async (req, res) => {
         await payment.save();
 
         // Xử lý entity liên quan (Booking/Subscription)
-        await _processPaymentSuccess(payment);
+        await _processPaymentSuccess(payment, req.app?.get?.('io') || null);
 
         // Tạo transaction log
         await Transaction.create({
@@ -108,6 +109,10 @@ exports.handlePayOSWebhook = async (req, res) => {
       if (payment.status === 'pending') {
         payment.status = 'failed';
         await payment.save();
+        notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
+          payment,
+          status: 'failed',
+        }).catch((error) => console.warn(`[WebhookNotification/payment_failed] ${error.message}`));
       }
       console.warn(`⚠️ Payment failed via webhook: orderCode=${orderCode}`);
     }

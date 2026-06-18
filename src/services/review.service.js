@@ -1,15 +1,19 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const Review = require('../models/Review');
 const Restaurant = require('../models/Restaurant');
 
 /**
  * Tính toán rating summary cho nhà hàng
  * Trả về: averageRating, totalReviews, distribution (1-5★)
+ * Chỉ tính toán dựa trên các đánh giá có trạng thái 'approved'
  */
 const calculateRatingSummary = async (restaurantId) => {
+  const rId = typeof restaurantId === 'string' ? new mongoose.Types.ObjectId(restaurantId) : restaurantId;
+  
   const pipeline = [
-    { $match: { restaurantId: restaurantId, status: 'visible' } },
+    { $match: { restaurantId: rId, status: 'approved' } },
     {
       $group: {
         _id: null,
@@ -59,6 +63,7 @@ const updateRestaurantRating = async (restaurantId) => {
     'stats.totalReviews': summary.totalReviews,
   });
 
+  console.log(`✅ Cập nhật stats nhà hàng ${restaurantId}: ${summary.averageRating}★, ${summary.totalReviews} đánh giá.`);
   return summary;
 };
 
