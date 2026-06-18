@@ -8,7 +8,8 @@ const mongoose = require('mongoose');
 /**
  * 1. Kiểm tra tính hợp lệ và tính số tiền giảm của Voucher
  */
-const validateVoucher = async (code, restaurantId, customerId, orderAmount) => {
+const validateVoucher = async (code, restaurantId, customerId, orderAmount, options = {}) => {
+  const readOnly = options?.readOnly === true;
   if (!code) {
     return { valid: false, reason: 'Mã voucher không được để trống', discountAmount: 0 };
   }
@@ -36,8 +37,10 @@ const validateVoucher = async (code, restaurantId, customerId, orderAmount) => {
 
   if (voucher.endDate && now > voucher.endDate) {
     // Tự động cập nhật expired nếu đã quá hạn
-    voucher.status = 'expired';
-    await voucher.save();
+    if (!readOnly) {
+      voucher.status = 'expired';
+      await voucher.save();
+    }
     return { valid: false, reason: 'Mã giảm giá đã hết hạn sử dụng', discountAmount: 0 };
   }
 
