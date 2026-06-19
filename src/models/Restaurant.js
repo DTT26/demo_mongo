@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeRestaurantImages } = require('../utils/restaurant-images');
 
 const restaurantSchema = new mongoose.Schema(
   {
@@ -106,6 +107,14 @@ const restaurantSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    coverImage: {
+      type: String,
+      default: null,
+    },
+    galleryImages: [{
+      type: String,
+      trim: true,
+    }],
 
     // ─── Pricing ───
     averagePrice: {
@@ -287,12 +296,12 @@ restaurantSchema.index({ ownerId: 1, approvalStatus: 1 });
 
 // ─── Virtual: Primary Image ───
 restaurantSchema.virtual('primaryImage').get(function () {
-  const primary = this.images.find(img => img.isPrimary);
-  return primary ? primary.url : (this.images[0]?.url || null);
+  return normalizeRestaurantImages(this).primaryImage;
 });
 
 // ─── Method: Public JSON ───
 restaurantSchema.methods.toPublicJSON = function () {
+  const imageData = normalizeRestaurantImages(this);
   return {
     id: this._id.toString(),
     ownerId: this.ownerId,
@@ -310,8 +319,11 @@ restaurantSchema.methods.toPublicJSON = function () {
     capacity: this.capacity,
     operatingHours: this.operatingHours,
     images: this.images,
-    logo: this.logo,
-    primaryImage: this.primaryImage,
+    logo: imageData.logo,
+    coverImage: imageData.coverImage,
+    coverImageUrl: imageData.coverImageUrl,
+    galleryImages: imageData.galleryImages,
+    primaryImage: imageData.primaryImage,
     averagePrice: this.averagePrice,
     priceRangeMin: this.priceRangeMin,
     priceRangeMax: this.priceRangeMax,
@@ -335,6 +347,7 @@ restaurantSchema.methods.toPublicJSON = function () {
 
 // ─── Method: Admin JSON (includes sensitive data) ───
 restaurantSchema.methods.toAdminJSON = function () {
+  const imageData = normalizeRestaurantImages(this);
   return {
     id: this._id.toString(),
     ownerId: this.ownerId,
@@ -349,7 +362,11 @@ restaurantSchema.methods.toAdminJSON = function () {
     capacity: this.capacity,
     operatingHours: this.operatingHours,
     images: this.images,
-    logo: this.logo,
+    logo: imageData.logo,
+    coverImage: imageData.coverImage,
+    coverImageUrl: imageData.coverImageUrl,
+    galleryImages: imageData.galleryImages,
+    primaryImage: imageData.primaryImage,
     approvalStatus: this.approvalStatus,
     approvedBy: this.approvedBy,
     approvedAt: this.approvedAt,

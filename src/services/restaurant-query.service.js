@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const Restaurant = require('../models/Restaurant');
+const { normalizeRestaurantImages } = require('../utils/restaurant-images');
 
 const PUBLIC_RESTAURANT_FILTER = Object.freeze({
   approvalStatus: 'approved',
@@ -26,6 +27,54 @@ const SORT_FIELD_MAP = Object.freeze({
   createdAt: 'createdAt',
 });
 
+const VIETNAMESE_CHAR_CLASSES = Object.freeze({
+  a: 'aàáảãạăằắẳẵặâầấẩẫậ',
+  d: 'dđ',
+  e: 'eèéẻẽẹêềếểễệ',
+  i: 'iìíỉĩị',
+  o: 'oòóỏõọôồốổỗộơờớởỡợ',
+  u: 'uùúủũụưừứửữự',
+  y: 'yỳýỷỹỵ',
+});
+
+const RESTAURANT_SEARCH_STOPWORDS = new Set([
+  'am',
+  'an',
+  'ban',
+  'can',
+  'cho',
+  'co',
+  'con',
+  'dat',
+  'di',
+  'duoc',
+  'dung',
+  'giup',
+  'gio',
+  'hang',
+  'khoang',
+  'khong',
+  'mai',
+  'minh',
+  'mon',
+  'muon',
+  'nao',
+  'neu',
+  'nha',
+  'nguoi',
+  'o',
+  'quan',
+  'restaurant',
+  'tao',
+  'thi',
+  'tim',
+  'toi',
+  'truoc',
+  'tui',
+  'voucher',
+  'xem',
+]);
+
 const toPositiveInt = (value, fallback, max) => {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 1) return fallback;
@@ -34,18 +83,57 @@ const toPositiveInt = (value, fallback, max) => {
 
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(String(value || ''));
 
-const getPrimaryImage = (restaurant) => (
-  restaurant.images?.find((img) => img.isPrimary)?.url
-  || restaurant.images?.[0]?.url
-  || null
-);
-
 const formatAddressText = (address) => {
   if (!address) return null;
   if (typeof address === 'string') return address;
   return address.fullAddress
     || [address.street, address.ward, address.district, address.city].filter(Boolean).join(', ')
     || null;
+};
+
+const normalizeVietnameseSearchText = (value = '') => String(value)
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/đ/g, 'd')
+  .replace(/Đ/g, 'D')
+  .toLowerCase();
+
+const escapeRegexChar = (char) => char.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+
+const makeVietnameseInsensitivePattern = (value = '') => normalizeVietnameseSearchText(value)
+  .replace(/\s+/g, ' ')
+  .trim()
+  .split('')
+  .map((char) => {
+    if (/\s/.test(char)) return '\\s+';
+    const charClass = VIETNAMESE_CHAR_CLASSES[char];
+    return charClass ? `[${charClass}]` : escapeRegexChar(char);
+  })
+  .join('');
+
+const buildVietnameseInsensitiveRegex = (value) => ({
+  $regex: makeVietnameseInsensitivePattern(value),
+  $options: 'i',
+});
+
+const tokenizeRestaurantSearch = (value = '') => normalizeVietnameseSearchText(value)
+  .split(/[^a-z0-9]+/i)
+  .map((token) => token.trim())
+  .filter((token) => token.length >= 2 && !RESTAURANT_SEARCH_STOPWORDS.has(token))
+  .slice(0, 6);
+
+const buildSearchClause = (token) => {
+  const regex = buildVietnameseInsensitiveRegex(token);
+  return {
+    $or: [
+      { name: regex },
+      { description: regex },
+      { cuisineTypes: regex },
+      { 'address.fullAddress': regex },
+      { 'address.city': regex },
+      { 'address.district': regex },
+    ],
+  };
 };
 
 const normalizeRestaurantQuery = (query = {}) => ({
@@ -63,13 +151,20 @@ const normalizeRestaurantQuery = (query = {}) => ({
 const buildPublicRestaurantFilter = (query = {}) => {
   const normalized = normalizeRestaurantQuery(query);
   const filter = { ...PUBLIC_RESTAURANT_FILTER };
+  const andClauses = [];
 
   if (normalized.cuisineType) {
-    filter.cuisineTypes = normalized.cuisineType;
+    andClauses.push(buildSearchClause(normalized.cuisineType));
   }
 
   if (normalized.city) {
-    filter['address.city'] = { $regex: normalized.city, $options: 'i' };
+    const cityRegex = buildVietnameseInsensitiveRegex(normalized.city);
+    andClauses.push({
+      $or: [
+        { 'address.city': cityRegex },
+        { 'address.fullAddress': cityRegex },
+      ],
+    });
   }
 
   if (normalized.featured !== undefined) {
@@ -85,12 +180,16 @@ const buildPublicRestaurantFilter = (query = {}) => {
   }
 
   if (normalized.search) {
-    filter.$or = [
-      { name: { $regex: normalized.search, $options: 'i' } },
-      { description: { $regex: normalized.search, $options: 'i' } },
-      { cuisineTypes: { $regex: normalized.search, $options: 'i' } },
-      { 'address.fullAddress': { $regex: normalized.search, $options: 'i' } },
-    ];
+    const tokens = tokenizeRestaurantSearch(normalized.search);
+    const searchClauses = tokens.length
+      ? tokens.map(buildSearchClause)
+      : [buildSearchClause(normalized.search)];
+
+    andClauses.push(...searchClauses);
+  }
+
+  if (andClauses.length) {
+    filter.$and = andClauses;
   }
 
   return filter;
@@ -103,15 +202,20 @@ const getSortObject = (query = {}) => {
   return { [sortField]: sortDir };
 };
 
-const formatPublicRestaurantSummary = (restaurant) => ({
+const formatPublicRestaurantSummary = (restaurant) => {
+  const imageData = normalizeRestaurantImages(restaurant);
+  return {
   id: restaurant._id.toString(),
   name: restaurant.name,
   description: restaurant.description,
   phoneNumber: restaurant.phoneNumber,
   email: restaurant.email,
   address: formatAddressText(restaurant.address),
-  logo: restaurant.logo || null,
-  coverImageUrl: getPrimaryImage(restaurant),
+  logo: imageData.logo,
+  coverImage: imageData.coverImage,
+  coverImageUrl: imageData.coverImageUrl,
+  galleryImages: imageData.galleryImages,
+  primaryImage: imageData.primaryImage,
   averagePrice: restaurant.averagePrice,
   priceRangeMin: restaurant.priceRangeMin,
   priceRangeMax: restaurant.priceRangeMax,
@@ -123,9 +227,12 @@ const formatPublicRestaurantSummary = (restaurant) => ({
   stats: restaurant.stats,
   featured: restaurant.featured,
   createdAt: restaurant.createdAt,
-});
+  };
+};
 
-const formatPublicRestaurantDetail = (restaurant) => ({
+const formatPublicRestaurantDetail = (restaurant) => {
+  const imageData = normalizeRestaurantImages(restaurant);
+  return {
   id: restaurant._id.toString(),
   name: restaurant.name,
   description: restaurant.description,
@@ -140,8 +247,11 @@ const formatPublicRestaurantDetail = (restaurant) => ({
   priceRange: restaurant.priceRange,
   capacity: restaurant.capacity,
   operatingHours: restaurant.operatingHours,
-  logo: restaurant.logo,
-  coverImageUrl: getPrimaryImage(restaurant),
+  logo: imageData.logo,
+  coverImage: imageData.coverImage,
+  coverImageUrl: imageData.coverImageUrl,
+  galleryImages: imageData.galleryImages,
+  primaryImage: imageData.primaryImage,
   images: restaurant.images,
   averagePrice: restaurant.averagePrice,
   priceRangeMin: restaurant.priceRangeMin,
@@ -159,7 +269,8 @@ const formatPublicRestaurantDetail = (restaurant) => ({
   reviewCount: restaurant.stats?.totalReviews || 0,
   featured: restaurant.featured,
   createdAt: restaurant.createdAt,
-});
+  };
+};
 
 const searchPublicRestaurants = async (query = {}) => {
   const normalized = normalizeRestaurantQuery(query);
@@ -240,6 +351,7 @@ module.exports = {
   PUBLIC_RESTAURANT_FILTER,
   PUBLIC_ACTIVE_RESTAURANT_FILTER,
   buildPublicRestaurantFilter,
+  buildVietnameseInsensitiveRegex,
   formatPublicRestaurantDetail,
   formatPublicRestaurantSummary,
   getPublicCuisineTypes,
@@ -247,6 +359,8 @@ module.exports = {
   getPublicRestaurantOperationalProfile,
   getPublicRestaurantPolicyRules,
   isValidObjectId,
+  makeVietnameseInsensitivePattern,
   normalizeRestaurantQuery,
   searchPublicRestaurants,
+  tokenizeRestaurantSearch,
 };

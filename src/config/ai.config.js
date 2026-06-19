@@ -41,17 +41,53 @@ const parseNumber = (env, name, defaultValue, { min, max }) => {
   return value;
 };
 
-const getAiConfig = (env = process.env) => {
-  const model = (env.OPENAI_MODEL || 'gpt-4o-mini').trim();
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,99}$/.test(model)) {
-    throw new AiConfigError('OPENAI_MODEL', 'OPENAI_MODEL is invalid');
+const parseProvider = (env, name, defaultValue) => {
+  const rawValue = env[name];
+  if (rawValue === undefined || rawValue === '') return defaultValue;
+
+  const value = String(rawValue).trim().toLowerCase();
+  if (['openai', 'groq'].includes(value)) return value;
+  throw new AiConfigError(name, `${name} must be openai or groq`);
+};
+
+const parseUrl = (env, name, defaultValue) => {
+  const rawValue = env[name];
+  const value = rawValue === undefined || rawValue === '' ? defaultValue : String(rawValue).trim();
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('unsupported protocol');
+    }
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    throw new AiConfigError(name, `${name} must be a valid http(s) URL`);
   }
+};
+
+const parseModel = (env, name, defaultValue) => {
+  const model = (env[name] || defaultValue).trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{1,119}$/.test(model)) {
+    throw new AiConfigError(name, `${name} is invalid`);
+  }
+  return model;
+};
+
+const getAiConfig = (env = process.env) => {
+  const model = parseModel(env, 'OPENAI_MODEL', 'gpt-4o-mini');
+  const timeoutMs = parseInteger(env, 'OPENAI_TIMEOUT_MS', 30000, { min: 1000, max: 120000 });
 
   return Object.freeze({
     enabled: parseBoolean(env, 'AI_ENABLED', false),
+    provider: parseProvider(env, 'AI_PROVIDER', 'openai'),
+    fallbackProvider: parseProvider(env, 'AI_FALLBACK_PROVIDER', 'groq'),
+    providerFallbackEnabled: parseBoolean(env, 'AI_PROVIDER_FALLBACK_ENABLED', true),
     apiKey: (env.OPENAI_API_KEY || '').trim(),
     model,
-    timeoutMs: parseInteger(env, 'OPENAI_TIMEOUT_MS', 30000, { min: 1000, max: 120000 }),
+    timeoutMs,
+    groqApiKey: (env.GROQ_API_KEY || '').trim(),
+    groqModel: parseModel(env, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+    groqBaseUrl: parseUrl(env, 'GROQ_BASE_URL', 'https://api.groq.com/openai/v1'),
+    groqTimeoutMs: parseInteger(env, 'GROQ_TIMEOUT_MS', 30000, { min: 1000, max: 120000 }),
     toolTimeoutMs: parseInteger(env, 'AI_TOOL_TIMEOUT_MS', 10000, { min: 100, max: 60000 }),
     maxInputChars: parseInteger(env, 'AI_MAX_INPUT_CHARS', 2000, { min: 1, max: 20000 }),
     maxHistoryMessages: parseInteger(env, 'AI_MAX_HISTORY_MESSAGES', 8, { min: 0, max: 20 }),

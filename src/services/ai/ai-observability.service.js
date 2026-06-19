@@ -21,6 +21,11 @@ const createEmptyStats = (now = Date.now()) => ({
     byStatus: {},
     byErrorCode: {},
   },
+  providers: {
+    byProvider: {},
+    failuresByProvider: {},
+    fallbackByReason: {},
+  },
   rateLimitHits: 0,
   providerFailures: 0,
   fallbackCount: 0,
@@ -33,6 +38,7 @@ const createEmptyStats = (now = Date.now()) => ({
     inputTokens: 0,
     outputTokens: 0,
     estimatedCost: 0,
+    byProvider: {},
   },
   windows: {
     daily: { startedAt: now, estimatedCost: 0 },
@@ -71,13 +77,23 @@ const createAiObservabilityService = ({ nowProvider = () => Date.now() } = {}) =
     }
   };
 
-  const recordTokenUsage = (usage = {}) => {
+  const recordTokenUsage = (usage = {}, providerUsed = 'unknown') => {
     rotateWindows();
     const normalized = normalizeUsage(usage);
     const cost = estimateCost(normalized);
     stats.tokenUsage.inputTokens += normalized.inputTokens;
     stats.tokenUsage.outputTokens += normalized.outputTokens;
     stats.tokenUsage.estimatedCost = Number((stats.tokenUsage.estimatedCost + cost).toFixed(8));
+    const provider = providerUsed || 'unknown';
+    const providerUsage = stats.tokenUsage.byProvider[provider] || {
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCost: 0,
+    };
+    providerUsage.inputTokens += normalized.inputTokens;
+    providerUsage.outputTokens += normalized.outputTokens;
+    providerUsage.estimatedCost = Number((providerUsage.estimatedCost + cost).toFixed(8));
+    stats.tokenUsage.byProvider[provider] = providerUsage;
     stats.windows.daily.estimatedCost = Number((stats.windows.daily.estimatedCost + cost).toFixed(8));
     stats.windows.monthly.estimatedCost = Number((stats.windows.monthly.estimatedCost + cost).toFixed(8));
     return { ...normalized, estimatedCost: cost };
@@ -106,19 +122,27 @@ const createAiObservabilityService = ({ nowProvider = () => Date.now() } = {}) =
     latencyMs = 0,
     usage = null,
     fallback = false,
+    providerUsed = 'unknown',
+    fallbackReason = null,
   } = {}) => {
     stats.requests.total += 1;
     increment(stats.requests.byRole, role);
     increment(stats.requests.byMode, mode);
     increment(stats.requests.byStatus, status);
     if (errorCode) increment(stats.requests.byErrorCode, errorCode);
+    increment(stats.providers.byProvider, providerUsed || 'unknown');
     if (errorCode && String(errorCode).startsWith('AI_')) stats.providerFailures += 1;
-    if (fallback) stats.fallbackCount += 1;
+    if (fallback) {
+      stats.fallbackCount += 1;
+      increment(stats.providers.fallbackByReason, fallbackReason || 'unknown');
+      increment(stats.providers.failuresByProvider, providerUsed === 'groq' ? 'openai' : 'unknown');
+      stats.providerFailures += 1;
+    }
     const latency = Math.max(0, Number(latencyMs) || 0);
     stats.latencyMs.total += latency;
     stats.latencyMs.count += 1;
     stats.latencyMs.max = Math.max(stats.latencyMs.max, latency);
-    const tokenUsage = usage ? recordTokenUsage(usage) : null;
+    const tokenUsage = usage ? recordTokenUsage(usage, providerUsed) : null;
     return tokenUsage;
   };
 
@@ -147,6 +171,7 @@ const createAiObservabilityService = ({ nowProvider = () => Date.now() } = {}) =
       startedAt: stats.startedAt,
       requests: stats.requests,
       tools: stats.tools,
+      providers: stats.providers,
       rateLimitHits: stats.rateLimitHits,
       providerFailures: stats.providerFailures,
       fallbackCount: stats.fallbackCount,

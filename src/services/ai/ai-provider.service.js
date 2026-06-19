@@ -2,6 +2,14 @@
 
 const OpenAI = require('openai');
 
+const PROVIDER_NAMES = Object.freeze(['openai', 'groq']);
+const FALLBACK_PROVIDER_ERROR_CODES = new Set([
+  'AI_AUTH_ERROR',
+  'AI_RATE_LIMITED',
+  'AI_TIMEOUT',
+  'AI_UNAVAILABLE',
+]);
+
 const PUBLIC_ERRORS = {
   AI_AUTH_ERROR: {
     message: 'Cấu hình Trợ lý BookEat chưa hợp lệ.',
@@ -66,8 +74,8 @@ const mapStreamEventError = (event) => {
 };
 
 const normalizeUsage = (usage) => ({
-  inputTokens: Number(usage?.input_tokens) || 0,
-  outputTokens: Number(usage?.output_tokens) || 0,
+  inputTokens: Number(usage?.input_tokens ?? usage?.prompt_tokens) || 0,
+  outputTokens: Number(usage?.output_tokens ?? usage?.completion_tokens) || 0,
 });
 
 const normalizeFunctionCall = (item) => ({
@@ -78,7 +86,65 @@ const normalizeFunctionCall = (item) => ({
   type: 'function_call',
 });
 
-const createOpenAiProvider = ({ clientFactory } = {}) => ({
+const normalizeProviderName = (providerName) => (
+  PROVIDER_NAMES.includes(providerName) ? providerName : 'openai'
+);
+
+const getProviderRuntimeConfig = (config = {}, providerName = 'openai') => {
+  const normalized = normalizeProviderName(providerName);
+
+  if (normalized === 'groq') {
+    return {
+      providerName: 'groq',
+      apiKey: config.groqApiKey || '',
+      model: config.groqModel || 'openai/gpt-oss-120b',
+      timeoutMs: config.groqTimeoutMs || config.timeoutMs || 30000,
+      baseURL: config.groqBaseUrl || 'https://api.groq.com/openai/v1',
+    };
+  }
+
+  return {
+    providerName: 'openai',
+    apiKey: config.apiKey || '',
+    model: config.model || 'gpt-4o-mini',
+    timeoutMs: config.timeoutMs || 30000,
+    baseURL: config.openaiBaseUrl || null,
+  };
+};
+
+const isProviderConfigured = (config = {}, providerName = 'openai') => (
+  Boolean(getProviderRuntimeConfig(config, providerName).apiKey)
+);
+
+const getProviderHealth = (config = {}) => {
+  const primaryProvider = normalizeProviderName(config.provider || 'openai');
+  const fallbackProvider = normalizeProviderName(config.fallbackProvider || 'groq');
+  const fallbackEnabled = Boolean(
+    config.providerFallbackEnabled
+    && fallbackProvider
+    && fallbackProvider !== primaryProvider
+  );
+  const openaiConfigured = isProviderConfigured(config, 'openai');
+  const groqConfigured = isProviderConfigured(config, 'groq');
+  const primaryConfigured = isProviderConfigured(config, primaryProvider);
+  const fallbackConfigured = fallbackEnabled && isProviderConfigured(config, fallbackProvider);
+
+  return {
+    primaryProvider,
+    fallbackProvider,
+    fallbackEnabled,
+    openaiConfigured,
+    groqConfigured,
+    primaryConfigured,
+    fallbackConfigured,
+    configured: primaryConfigured || fallbackConfigured,
+  };
+};
+
+const createOpenAiCompatibleProvider = ({
+  providerName = 'openai',
+  clientFactory,
+} = {}) => ({
   async *streamText({
     instructions,
     input,
@@ -87,17 +153,28 @@ const createOpenAiProvider = ({ clientFactory } = {}) => ({
     tools = [],
     maxToolCalls,
   }) {
-    const createClient = clientFactory || ((apiKey) => new OpenAI({
+    const runtime = getProviderRuntimeConfig(config, providerName);
+    if (!runtime.apiKey) {
+      throw new AiProviderError('AI_AUTH_ERROR', {
+        cause: {
+          provider: runtime.providerName,
+          code: 'missing_api_key',
+        },
+      });
+    }
+
+    const createClient = clientFactory || ((apiKey, providerConfig) => new OpenAI({
       apiKey,
+      ...(providerConfig.baseURL ? { baseURL: providerConfig.baseURL } : {}),
       maxRetries: 0,
-      timeout: config.timeoutMs,
+      timeout: providerConfig.timeoutMs,
     }));
 
     let stream;
     try {
-      const client = createClient(config.apiKey);
+      const client = createClient(runtime.apiKey, runtime);
       const body = {
-        model: config.model,
+        model: runtime.model,
         instructions,
         input,
         max_output_tokens: config.maxOutputTokens,
@@ -114,7 +191,7 @@ const createOpenAiProvider = ({ clientFactory } = {}) => ({
 
       stream = await client.responses.create(body, {
         signal,
-        timeout: config.timeoutMs,
+        timeout: runtime.timeoutMs,
         maxRetries: 0,
       });
     } catch (error) {
@@ -157,6 +234,103 @@ const createOpenAiProvider = ({ clientFactory } = {}) => ({
   },
 });
 
+const createOpenAiProvider = (options = {}) => createOpenAiCompatibleProvider({
+  ...options,
+  providerName: 'openai',
+});
+
+const createGroqProvider = (options = {}) => createOpenAiCompatibleProvider({
+  ...options,
+  providerName: 'groq',
+});
+
+const shouldFallbackToProvider = ({
+  error,
+  config,
+  fallbackProvider,
+  emittedProviderEvents,
+}) => {
+  const mappedError = mapProviderError(error);
+  return Boolean(
+    config?.providerFallbackEnabled
+    && fallbackProvider
+    && isProviderConfigured(config, fallbackProvider)
+    && emittedProviderEvents === 0
+    && FALLBACK_PROVIDER_ERROR_CODES.has(mappedError.code)
+  );
+};
+
+const createAiProviderManager = ({
+  providers = {
+    openai: createOpenAiProvider(),
+    groq: createGroqProvider(),
+  },
+} = {}) => ({
+  async *streamText(request) {
+    const config = request.config || {};
+    const health = getProviderHealth(config);
+    const primaryProvider = providers[health.primaryProvider];
+    const fallbackProvider = providers[health.fallbackProvider];
+    let emittedProviderEvents = 0;
+
+    if (!primaryProvider) {
+      throw new AiProviderError('AI_UNAVAILABLE', {
+        cause: { provider: health.primaryProvider, code: 'provider_not_registered' },
+      });
+    }
+
+    try {
+      yield {
+        type: 'provider_status',
+        providerUsed: health.primaryProvider,
+        fallbackUsed: false,
+        fallbackReason: null,
+      };
+
+      for await (const event of primaryProvider.streamText(request)) {
+        emittedProviderEvents += 1;
+        yield {
+          ...event,
+          providerUsed: health.primaryProvider,
+          fallbackUsed: false,
+          fallbackReason: null,
+        };
+      }
+      return;
+    } catch (error) {
+      const mappedError = mapProviderError(error);
+      if (!shouldFallbackToProvider({
+        error: mappedError,
+        config,
+        fallbackProvider: health.fallbackProvider,
+        emittedProviderEvents,
+      })) {
+        throw mappedError;
+      }
+
+      if (!fallbackProvider) {
+        throw mappedError;
+      }
+
+      yield {
+        type: 'provider_status',
+        providerUsed: health.fallbackProvider,
+        fallbackUsed: true,
+        fallbackReason: mappedError.code,
+      };
+
+      for await (const event of fallbackProvider.streamText(request)) {
+        yield {
+          ...event,
+          providerUsed: health.fallbackProvider,
+          fallbackUsed: true,
+          fallbackReason: mappedError.code,
+        };
+      }
+    }
+  },
+});
+
 const toPublicAiError = (error) => {
   const mappedError = mapProviderError(error);
   return {
@@ -168,8 +342,15 @@ const toPublicAiError = (error) => {
 
 module.exports = {
   AiProviderError,
+  createAiProviderManager,
+  createGroqProvider,
   createOpenAiProvider,
+  createOpenAiCompatibleProvider,
+  getProviderHealth,
+  getProviderRuntimeConfig,
+  isProviderConfigured,
   mapProviderError,
   normalizeFunctionCall,
+  normalizeProviderName,
   toPublicAiError,
 };

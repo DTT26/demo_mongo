@@ -86,7 +86,7 @@ const getMyFavorites = async (req, res) => {
     let favorites = await CustomerFavorite.find(favoriteQuery)
       .populate({
         path: 'restaurantId',
-        select: 'name logo coverImageUrl averageRating cuisineTypes address description averagePrice active approvalStatus',
+        select: 'name logo coverImage galleryImages images averageRating cuisineTypes address description averagePrice active approvalStatus',
       })
       .sort({ createdAt: -1 });
 

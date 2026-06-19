@@ -6,7 +6,7 @@ const { createAiToolRegistry } = require('./ai-tool-registry');
 const { createAiToolRunner } = require('./ai-tool-runner');
 const {
   AiProviderError,
-  createOpenAiProvider,
+  createAiProviderManager,
   mapProviderError,
 } = require('./ai-provider.service');
 
@@ -26,7 +26,7 @@ const makeFunctionCallOutputItem = (call, output) => ({
 });
 
 const createAiOrchestrator = ({
-  provider = createOpenAiProvider(),
+  provider = createAiProviderManager(),
   configProvider = getAiConfig,
   registry = createAiToolRegistry(),
   toolRunner = createAiToolRunner({ registry }),
@@ -80,7 +80,9 @@ const createAiOrchestrator = ({
           tools: canUseTools ? toolDefinitions : [],
           maxToolCalls: canUseTools ? maxToolCalls - toolCallsUsed : 0,
         })) {
-          if (event.type === 'delta') {
+          if (event.type === 'provider_status') {
+            yield event;
+          } else if (event.type === 'delta') {
             yield event;
           } else if (event.type === 'function_call') {
             roundToolCalls.push(event.call);

@@ -209,10 +209,12 @@ const createAiRouter = (controller = aiController, options = {}) => {
         latencyMs,
         usage: telemetry.usage || null,
         fallback: telemetry.fallback === true,
+        providerUsed: telemetry.providerUsed || 'unknown',
+        fallbackReason: telemetry.fallbackReason || null,
       });
       const logUserId = telemetry.userId || actor.userId || 'guest';
       console.info(
-        `[AI] requestId=${req.aiRequestId} method=${req.method} path=${req.path} status=${res.statusCode} userId=${logUserId} role=${telemetry.role || actor.role} mode=${telemetry.mode || 'unknown'} toolCount=${telemetry.toolCount || 0} errorCode=${telemetry.errorCode || 'none'} inputTokens=${tokenUsage?.inputTokens || 0} outputTokens=${tokenUsage?.outputTokens || 0} estimatedCost=${tokenUsage?.estimatedCost || 0} latencyMs=${latencyMs.toFixed(1)}`,
+        `[AI] requestId=${req.aiRequestId} method=${req.method} path=${req.path} status=${res.statusCode} userId=${logUserId} role=${telemetry.role || actor.role} mode=${telemetry.mode || 'unknown'} providerUsed=${telemetry.providerUsed || 'unknown'} fallbackUsed=${telemetry.fallback === true} fallbackReason=${telemetry.fallbackReason || 'none'} toolCount=${telemetry.toolCount || 0} errorCode=${telemetry.errorCode || 'none'} inputTokens=${tokenUsage?.inputTokens || 0} outputTokens=${tokenUsage?.outputTokens || 0} estimatedCost=${tokenUsage?.estimatedCost || 0} latencyMs=${latencyMs.toFixed(1)}`,
       );
     };
 
