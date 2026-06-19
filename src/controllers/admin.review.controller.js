@@ -15,8 +15,12 @@ const getReportedReviews = async (req, res) => {
     const query = { reportCount: { $gt: 0 } };
 
     // Optional filter by status
-    if (req.query.status && ['visible', 'hidden'].includes(req.query.status)) {
-      query.status = req.query.status;
+    if (req.query.status) {
+      if (req.query.status === 'visible') {
+        query.status = { $ne: 'hidden' };
+      } else if (['approved', 'reported', 'hidden'].includes(req.query.status)) {
+        query.status = req.query.status;
+      }
     }
 
     const [reviews, total] = await Promise.all([
@@ -124,14 +128,14 @@ const restoreReview = async (req, res) => {
       });
     }
 
-    if (review.status === 'visible') {
+    if (review.status !== 'hidden') {
       return res.status(400).json({
         success: false,
         message: 'Đánh giá này đang hiển thị, không cần khôi phục',
       });
     }
 
-    review.status = 'visible';
+    review.status = 'approved';
     review.hiddenBy = null;
     review.hiddenAt = null;
     review.hideReason = null;

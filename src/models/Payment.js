@@ -39,6 +39,21 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       default: 'VND',
     },
+    voucherId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Voucher',
+      default: null,
+    },
+    discountApplied: {
+      type: Number,
+      default: 0,
+      min: [0, 'Số tiền giảm giá không thể âm'],
+    },
+    amountBeforeDiscount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Số tiền trước giảm giá không thể âm'],
+    },
 
     // ─── Trạng thái ───
     status: {

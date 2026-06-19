@@ -1,3 +1,7 @@
+const dns = require('dns');
+// Thiết lập DNS để tránh lỗi querySrv ECONNREFUSED trên một số mạng Windows
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');

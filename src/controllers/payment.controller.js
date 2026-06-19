@@ -44,7 +44,7 @@ exports.createPayment = async (req, res) => {
 
     // ─── Tính tiền theo loại ───
     if (targetType === 'booking') {
-      const booking = await Booking.findById(targetId).populate('restaurantId');
+      const booking = await Booking.findById(targetId).populate('restaurantId').populate('voucherId');
       if (!booking) {
         return res.status(404).json({ success: false, message: 'Booking không tồn tại.' });
       }
@@ -191,6 +191,9 @@ exports.createPayment = async (req, res) => {
       description,
       metadata,
       status: 'pending',
+      voucherId: targetType === 'booking' ? (booking.voucherId?._id || booking.voucherId) : null,
+      discountApplied: targetType === 'booking' ? (booking.discountAmount || 0) : 0,
+      amountBeforeDiscount: targetType === 'booking' ? (booking.depositAmount || 0) : amount,
     });
 
     // ─── Gọi PayOS tạo link thanh toán ───

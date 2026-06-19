@@ -620,7 +620,7 @@ test('admin can hide and restore review', async () => {
       })
     );
     assert.equal(restoreRes.statusCode, 200);
-    assert.equal(restoreRes.body.data.status, 'visible');
+    assert.equal(restoreRes.body.data.status, 'approved');
     assert.equal(restoreRes.body.data.hideReason, null);
 
     // Cannot restore already visible

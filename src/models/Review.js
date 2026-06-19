@@ -85,6 +85,13 @@ const reviewSchema = new mongoose.Schema(
         maxlength: [500, 'Nội dung phản hồi không được vượt quá 500 ký tự'],
         default: null,
       },
+      content: {
+        type: String,
+        trim: true,
+        minlength: [5, 'Nội dung phản hồi phải có ít nhất 5 ký tự'],
+        maxlength: [500, 'Nội dung phản hồi không được vượt quá 500 ký tự'],
+        default: null,
+      },
       repliedAt: {
         type: Date,
         default: null,
@@ -141,8 +148,9 @@ reviewSchema.methods.toPublicJSON = function () {
     comment: this.comment,
     images: this.images,
     helpfulCount: this.helpfulCount,
-    ownerReply: this.ownerReply?.comment ? {
-      comment: this.ownerReply.comment,
+    ownerReply: (this.ownerReply?.comment || this.ownerReply?.content) ? {
+      comment: this.ownerReply.comment || this.ownerReply.content,
+      content: this.ownerReply.content || this.ownerReply.comment,
       repliedAt: this.ownerReply.repliedAt,
     } : null,
     status: this.status,

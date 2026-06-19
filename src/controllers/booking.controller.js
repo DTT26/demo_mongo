@@ -133,7 +133,8 @@ const createBookingLegacy = async (req, res) => {
     let voucherId = null;
     if (voucherCode) {
       const voucherService = require('../services/voucher.service');
-      const valResult = await voucherService.validateVoucher(voucherCode, restaurantId, customerId, depositAmount);
+      const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+      const valResult = await voucherService.validateVoucher(voucherCode, restaurantId, customerId, depositAmount, ipAddress);
       if (valResult.valid) {
         discountAmount = valResult.discountAmount;
         voucherId = valResult.voucher._id;
@@ -158,7 +159,10 @@ const createBookingLegacy = async (req, res) => {
       tableNumbers: assignedTables,
       depositAmount,
       discountAmount,
+      voucherCode: voucherCode ? voucherCode.toUpperCase().trim() : null,
       voucherId,
+      originalAmount: depositAmount,
+      finalAmount: Math.max(0, depositAmount - discountAmount),
       status: 'pending',
       statusHistory: [
         {
@@ -501,6 +505,16 @@ const cancelBooking = async (req, res) => {
     });
 
     await booking.save();
+
+    // Reverse voucher redemption if any
+    if (booking.voucherId) {
+      try {
+        const voucherService = require('../services/voucher.service');
+        await voucherService.reverseRedemption(booking._id, reason || 'Khách hàng hủy đặt bàn', req.user);
+      } catch (reverseErr) {
+        console.error('❌ Lỗi hoàn nguyên voucher khi hủy đặt bàn:', reverseErr.message);
+      }
+    }
 
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');

@@ -15,6 +15,55 @@ const voucherSchema = new mongoose.Schema(
       trim: true,
       maxlength: [255, 'Mô tả không được vượt quá 255 ký tự'],
     },
+    name: {
+      type: String,
+      required: [true, 'Tên voucher là bắt buộc'],
+      trim: true,
+    },
+    type: {
+      type: String,
+      enum: ['platform', 'restaurant', 'loyalty', 'referral', 'system', 'compensation'],
+      default: 'restaurant',
+    },
+    createdByRole: {
+      type: String,
+      enum: ['admin', 'owner', 'system'],
+      default: 'owner',
+    },
+    customerSegments: {
+      type: [String],
+      enum: ['all', 'new_user', 'vip', 'inactive'],
+      default: ['all'],
+    },
+    applicableRestaurants: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Restaurant',
+    }],
+    applicableCities: {
+      type: [String],
+      default: [],
+    },
+    applicableCategories: {
+      type: [String],
+      default: [],
+    },
+    stackable: {
+      type: Boolean,
+      default: false,
+    },
+    priority: {
+      type: Number,
+      default: 0,
+    },
+    currentUsage: {
+      type: Number,
+      default: 0,
+    },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'VoucherCampaign',
+      default: null,
+    },
     discountType: {
       type: String,
       enum: ['percentage', 'fixed_amount'],
@@ -61,7 +110,7 @@ const voucherSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'inactive', 'expired', 'paused', 'disabled'],
+      enum: ['active', 'inactive', 'expired', 'paused', 'disabled', 'scheduled'],
       default: 'active',
       index: true,
     },
@@ -78,5 +127,7 @@ const voucherSchema = new mongoose.Schema(
 
 // Index thời gian và trạng thái để tối ưu truy vấn tìm kiếm khuyến mại
 voucherSchema.index({ startDate: 1, endDate: 1, status: 1 });
+voucherSchema.index({ type: 1, status: 1, startDate: 1, endDate: 1 });
+voucherSchema.index({ campaignId: 1 });
 
 module.exports = mongoose.model('Voucher', voucherSchema);
