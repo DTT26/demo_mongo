@@ -4,7 +4,7 @@ const { getAiConfig } = require('../config/ai.config');
 const aiMockService = require('../services/ai/ai-mock.service');
 const { defaultAiObservabilityService } = require('../services/ai/ai-observability.service');
 const { createAiOrchestrator } = require('../services/ai/ai-orchestrator.service');
-const { toPublicAiError } = require('../services/ai/ai-provider.service');
+const { getProviderHealth, toPublicAiError } = require('../services/ai/ai-provider.service');
 const aiStreamService = require('../services/ai/ai-stream.service');
 
 const isMockEnabled = () => {
@@ -29,6 +29,7 @@ const STREAM_MOCK_FALLBACK_CODES = new Set([
 const getProviderCauseForLog = (error) => {
   const cause = error?.cause || {};
   const parts = [];
+  if (cause.provider) parts.push(`provider=${cause.provider}`);
   if (cause.status) parts.push(`providerStatus=${cause.status}`);
   if (cause.code) parts.push(`providerCode=${cause.code}`);
   if (cause.type) parts.push(`providerType=${cause.type}`);
@@ -217,6 +218,11 @@ const createAiController = ({
           enabled: false,
           configured: false,
           provider: 'openai',
+          primaryProvider: 'openai',
+          fallbackProvider: 'groq',
+          fallbackEnabled: false,
+          openaiConfigured: false,
+          groqConfigured: false,
           phase: 10,
           mockEnabled: isMockEnabled(),
           publicToolsEnabled: false,
@@ -234,13 +240,20 @@ const createAiController = ({
       });
     }
 
+    const providerHealth = getProviderHealth(config);
+
     return res.json({
       success: true,
       data: {
         status: 'ok',
-        enabled: config.enabled && Boolean(config.apiKey),
-        configured: Boolean(config.apiKey),
-        provider: 'openai',
+        enabled: config.enabled && providerHealth.configured,
+        configured: providerHealth.configured,
+        provider: providerHealth.primaryProvider,
+        primaryProvider: providerHealth.primaryProvider,
+        fallbackProvider: providerHealth.fallbackProvider,
+        fallbackEnabled: providerHealth.fallbackEnabled,
+        openaiConfigured: providerHealth.openaiConfigured,
+        groqConfigured: providerHealth.groqConfigured,
         phase: 10,
         mockEnabled: isMockEnabled(),
         publicToolsEnabled: Boolean(config.publicToolsEnabled),
@@ -328,7 +341,8 @@ const createAiController = ({
       );
     }
 
-    if (!config.enabled || !config.apiKey) {
+    const providerHealth = getProviderHealth(config);
+    if (!config.enabled || !providerHealth.configured) {
       req.aiTelemetry = {
         ...(req.aiTelemetry || {}),
         mode: 'unavailable',
@@ -396,6 +410,8 @@ const createAiController = ({
       mode,
       role: req.user?.role || 'guest',
       userId: req.user?._id || req.user?.id || null,
+      providerUsed: null,
+      fallbackReason: null,
       toolCount: 0,
       status: 'streaming',
       usage: { inputTokens: 0, outputTokens: 0 },
@@ -404,7 +420,14 @@ const createAiController = ({
     const writeAiEvent = (event) => {
       if (streamClosed) return;
 
-      if (event.type === 'delta' && event.text) {
+      if (event.type === 'provider_status') {
+        req.aiTelemetry.providerUsed = event.providerUsed || req.aiTelemetry.providerUsed || null;
+        req.aiTelemetry.fallback = req.aiTelemetry.fallback || event.fallbackUsed === true;
+        req.aiTelemetry.fallbackReason = event.fallbackReason || req.aiTelemetry.fallbackReason || null;
+        if (event.fallbackUsed) {
+          console.warn(`[AI] requestId=${req.aiRequestId} providerUsed=${event.providerUsed} fallbackReason=${event.fallbackReason || 'unknown'}`);
+        }
+      } else if (event.type === 'delta' && event.text) {
         streamService.writeSseEvent(res, 'delta', {
           requestId: req.aiRequestId,
           sequence: sequence++,
@@ -485,6 +508,7 @@ const createAiController = ({
 
       if (!streamClosed && canUseMockFallback) {
         req.aiTelemetry.fallback = true;
+        req.aiTelemetry.fallbackReason = safeError.code;
         console.warn(`[AI] requestId=${req.aiRequestId} using mock public tool stream fallback`);
         try {
           for await (const fallbackEvent of mockService.streamMockChat({

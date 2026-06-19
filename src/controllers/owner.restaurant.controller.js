@@ -4,6 +4,11 @@ const Restaurant = require('../models/Restaurant');
 const Booking = require('../models/Booking');
 const RestaurantActivityLog = require('../models/RestaurantActivityLog');
 const { assertOwnerCanAccessRestaurant } = require('../utils/restaurant-permission');
+const {
+  normalizeRestaurantImages,
+  sanitizeRestaurantImagePayload,
+  validateRestaurantImagePayload,
+} = require('../utils/restaurant-images');
 
 // ─────────────────────────────────────────────
 // Regex constants
@@ -146,6 +151,8 @@ exports.createRestaurant = async (req, res) => {
       }
     }
 
+    errors.push(...validateRestaurantImagePayload(body));
+
     // Return errors if any
     if (errors.length > 0) {
       return res.status(400).json({
@@ -160,6 +167,8 @@ exports.createRestaurant = async (req, res) => {
       const { street, ward, district, city } = body.address;
       body.address.fullAddress = [street, ward, district, city].filter(Boolean).join(', ');
     }
+
+    sanitizeRestaurantImagePayload(body);
 
     // ── Create restaurant ──
     const restaurant = await Restaurant.create({
@@ -225,8 +234,7 @@ exports.getMyRestaurants = async (req, res) => {
       phoneNumber: r.phoneNumber,
       email: r.email,
       address: r.address,
-      logo: r.logo,
-      primaryImage: r.images?.find((img) => img.isPrimary)?.url || r.images?.[0]?.url || null,
+      ...normalizeRestaurantImages(r),
       approvalStatus: r.approvalStatus,
       rejectionReason: r.rejectionReason,
       suspensionReason: r.suspensionReason,
@@ -463,6 +471,8 @@ exports.updateRestaurant = async (req, res) => {
       }
     }
 
+    errors.push(...validateRestaurantImagePayload(body));
+
     if (errors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -477,11 +487,13 @@ exports.updateRestaurant = async (req, res) => {
       body.address.fullAddress = [street, ward, district, city].filter(Boolean).join(', ');
     }
 
+    sanitizeRestaurantImagePayload(body);
+
     // ── Update fields ──
     const fieldsToUpdate = [
       'name', 'description', 'phoneNumber', 'email', 'websiteUrl', 'contactHotline',
       'contactSecondaryPhone', 'address', 'coordinates', 'cuisineTypes', 'priceRange',
-      'capacity', 'operatingHours', 'images', 'logo', 'averagePrice', 'priceRangeMin',
+      'capacity', 'operatingHours', 'images', 'logo', 'coverImage', 'galleryImages', 'averagePrice', 'priceRangeMin',
       'priceRangeMax', 'statusMessage', 'heroCity', 'heroHeadline', 'heroSubheadline',
       'heroSearchPlaceholder', 'bookingInformation', 'bookingNotes', 'generalPromotions',
       'groupPromotions', 'promotionNotes', 'summaryHighlights', 'suitableFor',

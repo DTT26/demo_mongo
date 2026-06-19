@@ -23,6 +23,24 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
+const uploadImageMiddleware = (req, res, next) => {
+  upload.single('image')(req, res, (error) => {
+    if (!error) return next();
+
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        message: 'File qua lon. Vui long chon file duoi 5MB.',
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'File anh khong hop le.',
+    });
+  });
+};
+
 // ─────────────────────────────────────────────
 // POST /api/v1/upload/image — Upload ảnh lên Cloudinary
 // ─────────────────────────────────────────────
@@ -79,4 +97,4 @@ const uploadImage = async (req, res) => {
   }
 };
 
-module.exports = { upload, uploadImage };
+module.exports = { upload, uploadImage, uploadImageMiddleware };
