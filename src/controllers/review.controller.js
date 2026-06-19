@@ -481,6 +481,7 @@ const replyReview = async (req, res) => {
 
     review.ownerReply = {
       comment: comment.trim(),
+      content: comment.trim(),
       repliedAt: new Date(),
       repliedBy: ownerId,
     };

@@ -49,6 +49,8 @@ router.get('/admin/campaigns', protect, restrictTo('admin'), adminVoucherCtrl.ge
 router.put('/admin/campaigns/:id', protect, restrictTo('admin'), adminVoucherCtrl.updateAdminCampaign);
 
 // ─── Shared Owner & Admin Legacy Routes (for backwards compatibility/routing integrity) ───
+// NOTE: FE đã dùng routes riêng /owner/... và /admin/... cho từng role.
+// Các routes này chỉ giữ lại để tránh breaking change với các client cũ.
 router.post('/', protect, restrictTo('restaurant_owner', 'admin'), (req, res, next) => {
   if (req.user.role === 'admin') return adminVoucherCtrl.createPlatformVoucher(req, res, next);
   return ownerVoucherCtrl.createOwnerVoucher(req, res, next);
@@ -61,10 +63,10 @@ router.delete('/:id', protect, restrictTo('restaurant_owner', 'admin'), (req, re
   if (req.user.role === 'admin') return adminVoucherCtrl.deleteAdminVoucher(req, res, next);
   return ownerVoucherCtrl.deleteOwnerVoucher(req, res, next);
 });
-router.get('/:id/stats', protect, restrictTo('restaurant_owner', 'admin'), (req, res, next) => {
-  if (req.user.role === 'admin') return adminVoucherCtrl.resetAdminVoucherUsage(req, res, next);
-  return ownerVoucherCtrl.getOwnerVoucherStats(req, res, next);
-});
+// BUG-001 FIX: Trước đây admin gọi GET /:id/stats nhưng thực thi resetAdminVoucherUsage (sai).
+// Sửa lại: cả 2 role đều gọi getOwnerVoucherStats cho voucher stats.
+// Admin nên dùng route riêng /admin/vouchers/:id và /admin/vouchers/:id/reset-usage.
+router.get('/:id/stats', protect, restrictTo('restaurant_owner', 'admin'), ownerVoucherCtrl.getOwnerVoucherStats);
 
 // ─── Internal APIs (Server-to-server validation & execution loops) ───
 router.post('/internal/redeem', voucherCtrl.redeemVoucherInternal);

@@ -30,17 +30,34 @@ const getRestaurantReviewsForOwner = async (req, res) => {
     const reviewQuery = { restaurantId: restaurant._id };
 
     // Filter by status
-    if (req.query.status && ['visible', 'hidden'].includes(req.query.status)) {
-      reviewQuery.status = req.query.status;
+    if (req.query.status) {
+      if (req.query.status === 'visible') {
+        reviewQuery.status = { $ne: 'hidden' };
+      } else if (['approved', 'reported', 'hidden'].includes(req.query.status)) {
+        reviewQuery.status = req.query.status;
+      }
     }
 
     // Filter by replied/not-replied
     if (req.query.replied === 'true') {
-      reviewQuery['ownerReply.content'] = { $ne: null };
-    } else if (req.query.replied === 'false') {
       reviewQuery.$or = [
-        { 'ownerReply.content': null },
-        { 'ownerReply.content': { $exists: false } },
+        { 'ownerReply.comment': { $ne: null } },
+        { 'ownerReply.content': { $ne: null } }
+      ];
+    } else if (req.query.replied === 'false') {
+      reviewQuery.$and = [
+        {
+          $or: [
+            { 'ownerReply.comment': null },
+            { 'ownerReply.comment': { $exists: false } }
+          ]
+        },
+        {
+          $or: [
+            { 'ownerReply.content': null },
+            { 'ownerReply.content': { $exists: false } }
+          ]
+        }
       ];
     }
 
@@ -125,6 +142,7 @@ const replyToReview = async (req, res) => {
     }
 
     review.ownerReply = {
+      comment: content.trim(),
       content: content.trim(),
       repliedAt: new Date(),
       repliedBy: ownerId,
