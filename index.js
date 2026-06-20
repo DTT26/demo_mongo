@@ -18,7 +18,11 @@ const server = http.createServer(app);
 // ─────────────────────────────────────────────
 // Middleware
 // ─────────────────────────────────────────────
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf?.toString('utf8') || '';
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Passport — cần khởi tạo trước khi dùng routes

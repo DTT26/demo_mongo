@@ -57,6 +57,18 @@ const toRestaurantCard = (restaurant) => ({
   coverImageUrl: restaurant.coverImageUrl || null,
   logo: restaurant.logo || null,
   featured: Boolean(restaurant.featured),
+  sponsoredVoucher: restaurant.voucherCampaign?.voucher ? {
+    code: restaurant.voucherCampaign.voucher.code,
+    description: compactText(restaurant.voucherCampaign.voucher.description, 160),
+    discountType: restaurant.voucherCampaign.voucher.discountType,
+    discountValue: restaurant.voucherCampaign.voucher.discountValue,
+    maxDiscountAmount: restaurant.voucherCampaign.voucher.maxDiscountAmount,
+    minOrderAmount: restaurant.voucherCampaign.voucher.minOrderAmount,
+    validUntil: restaurant.voucherCampaign.voucher.endDate,
+    campaignEndAt: restaurant.voucherCampaign.endAt,
+    sponsoredLabel: restaurant.voucherCampaign.sponsoredLabel,
+    placement: restaurant.voucherCampaign.placement,
+  } : null,
   detailUrl: `/restaurants/${restaurant.id}`,
 });
 
@@ -135,6 +147,7 @@ const createPublicCustomerTools = ({
       priceRange: priceRange || '',
       limit,
       page: 1,
+      boostPlacement: 'ai_suggestion',
       sortBy: 'averageRating',
       sortDir: 'desc',
     });

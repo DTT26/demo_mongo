@@ -8,6 +8,13 @@ const transactionSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    idempotencyKey: {
+      type: String,
+      default: null,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
     type: {
       type: String,
       enum: ['payment', 'refund', 'adjustment'],

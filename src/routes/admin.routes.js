@@ -48,10 +48,21 @@ router.patch( '/bookings/:id/status', adminBookingController.updateBookingStatus
 
 // ─── Payments & Revenue Management ───
 const adminPaymentController = require('../controllers/admin.payment.controller');
+const bookingCommissionController = require('../controllers/booking-commission.controller');
+const adminMonetizationController = require('../controllers/admin-monetization.controller');
 router.get(   '/payments',           adminPaymentController.getAllPayments);
 router.get(   '/transactions',       adminPaymentController.getAllTransactions);
 router.get(   '/revenue',            adminPaymentController.getRevenue);
 router.get(   '/webhook-logs',       adminPaymentController.getWebhookLogs);
+router.get(   '/monetization/summary', adminMonetizationController.getRevenueSummary);
+router.get(   '/monetization/payments', adminMonetizationController.getPaymentTransactions);
+router.get(   '/monetization/booking-commissions', adminMonetizationController.getBookingCommissions);
+router.get(   '/monetization/top-owners', adminMonetizationController.getTopOwners);
+router.get(   '/monetization/top-restaurants', adminMonetizationController.getTopRestaurants);
+router.get(   '/monetization/payment-health', adminMonetizationController.getPaymentHealth);
+router.get(   '/monetization/settlement-readiness', adminMonetizationController.getSettlementReadiness);
+router.get(   '/monetization/export.csv', adminMonetizationController.exportRevenueCsv);
+router.get(   '/monetization/legacy-booking-commissions', bookingCommissionController.getAdminCommissions);
 
 // ─── Refund Management ───
 const refundController = require('../controllers/refund.controller');

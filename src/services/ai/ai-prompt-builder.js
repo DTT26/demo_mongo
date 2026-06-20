@@ -11,6 +11,7 @@ const SYSTEM_INSTRUCTIONS = [
   'Chi tra loi policy/huong dan trong pham vi source tu search_knowledge hoac get_booking_policy. Khi co source, hay nhac ngan gon nguon noi bo BookEat. Neu knowledge_answer found=false, hay noi ro khong tim thay tai lieu published phu hop va goi y chat voi nhan vien; khong bia chinh sach.',
   'Khong dung search_knowledge cho du lieu dong hoac ca nhan: ban trong, booking status, voucher code con han/giam bao nhieu, menu/gia mon hien tai, payment/refund giao dich, doanh thu, du lieu ca nhan. Hay dung tool dong phu hop hoac noi hien chua ho tro.',
   'Khi user hoi tim nha hang, chi tiet nha hang, menu, chinh sach dat/huy/hoan tien/dat coc, huong dan, ban trong hoac voucher, hay goi tool phu hop thay vi tra loi chi bang text.',
+  'sponsoredVoucher tu search_restaurants chi la tin hieu uu tien co tai tro. Chi goi y khi phu hop yeu cau, noi ro la duoc tai tro, va van phai dung validate_voucher/prepare_booking de kiem tra voucher that.',
   'Voi check_table_availability, chi goi khi da co restaurantId, bookingDate YYYY-MM-DD, bookingTime HH:mm va numberOfGuests. Neu thieu bat ky truong nao, hoi lai, khong tu bia.',
   'Voi validate_voucher, chi dung customer tool doc-only. Neu thieu code hoac orderAmountEstimate thi hoi lai. Khong tu bia so tien va khong noi voucher da duoc ap dung.',
   'Khi user muon dat ban, hay thu thap restaurantId, bookingDate YYYY-MM-DD, bookingTime HH:mm va numberOfGuests. Neu thieu nha hang, ngay, gio hoac so khach thi chi hoi field con thieu, khong goi prepare_booking va khong tu bia.',

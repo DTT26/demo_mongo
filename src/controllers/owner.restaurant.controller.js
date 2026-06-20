@@ -9,6 +9,7 @@ const {
   sanitizeRestaurantImagePayload,
   validateRestaurantImagePayload,
 } = require('../utils/restaurant-images');
+const { canCreateRestaurant } = require('../services/plan-gating.service');
 
 // ─────────────────────────────────────────────
 // Regex constants
@@ -25,6 +26,24 @@ exports.createRestaurant = async (req, res) => {
   try {
     const ownerId = req.user._id;
     const body = req.body;
+
+    const quota = await canCreateRestaurant(ownerId);
+    if (!quota.allowed) {
+      const planNames = { free: 'Free', plus: 'Plus', pro: 'Pro' };
+      const planName = planNames[quota.planCode] || quota.planCode;
+      return res.status(403).json({
+        success: false,
+        code: 'RESTAURANT_LIMIT_REACHED',
+        message: `Gói ${planName} chỉ cho phép tạo tối đa ${quota.limit} nhà hàng. Vui lòng nâng cấp gói để tạo thêm.`,
+        data: {
+          planCode: quota.planCode,
+          currentCount: quota.currentCount,
+          limit: quota.limit,
+          remaining: quota.remaining,
+          recommendedPlan: quota.recommendedPlan,
+        },
+      });
+    }
 
     // ── Validate required fields ──
     const errors = [];
@@ -243,6 +262,8 @@ exports.getMyRestaurants = async (req, res) => {
       createdAt: r.createdAt,
     }));
 
+    const quota = await canCreateRestaurant(ownerId);
+
     return res.status(200).json({
       success: true,
       data: {
@@ -250,6 +271,13 @@ exports.getMyRestaurants = async (req, res) => {
         total,
         page,
         totalPages: Math.ceil(total / limit),
+        restaurantQuota: {
+          planCode: quota.planCode,
+          currentCount: quota.currentCount,
+          limit: quota.limit,
+          remaining: quota.remaining,
+          recommendedPlan: quota.recommendedPlan,
+        },
       },
     });
   } catch (error) {

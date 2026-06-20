@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Voucher = require('../models/Voucher');
 const CustomerVoucher = require('../models/CustomerVoucher');
 const VoucherRedemption = require('../models/VoucherRedemption');
+const voucherCampaignService = require('./voucher-campaign.service');
 const VoucherAuditLog = require('../models/VoucherAuditLog');
 const Restaurant = require('../models/Restaurant');
 const validationService = require('./voucher.validation.service');
@@ -619,18 +620,33 @@ const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) =
   }).sort({ createdAt: -1 });
 
   // Nếu truyền customerId, trả về thêm thông tin đã lưu hay chưa
+  const campaignMap = new Map(
+    (await voucherCampaignService.getActiveCampaigns({
+      restaurantIds: [restaurantId],
+      voucherIds: vouchers.map((voucher) => voucher._id),
+    })).map((campaign) => [String(campaign.voucherId?._id || campaign.voucherId), campaign])
+  );
+
+  const annotated = vouchers.map((voucher) => {
+    const item = voucher.toObject();
+    const campaign = campaignMap.get(String(voucher._id));
+    item.isSponsored = Boolean(campaign);
+    item.sponsoredLabel = campaign ? 'Duoc tai tro' : null;
+    item.campaignPlacement = campaign?.placement || null;
+    item.campaignEndAt = campaign?.endAt || null;
+    return item;
+  }).sort((a, b) => Number(b.isSponsored) - Number(a.isSponsored));
+
   if (customerId) {
     const savedVoucherIds = await CustomerVoucher.find({ customerId })
       .distinct('voucherId');
-
-    return vouchers.map(v => {
-      const item = v.toObject();
-      item.isSaved = savedVoucherIds.some(id => id.toString() === v._id.toString());
+    return annotated.map(item => {
+      item.isSaved = savedVoucherIds.some(id => id.toString() === item._id.toString());
       return item;
     });
   }
 
-  return vouchers;
+  return annotated;
 };
 
 /**

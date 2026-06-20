@@ -9,6 +9,7 @@ const { protect, restrictTo } = require('../middleware/auth.middleware');
 
 // ─── Public Routes ───
 router.get('/restaurant/:restaurantId', voucherCtrl.getRestaurantVouchers);
+router.get('/campaigns/homepage', voucherCtrl.getHomepageVoucherCampaigns);
 router.get('/platform', voucherCtrl.getPlatformVouchers); // Get platform vouchers list
 
 // ─── Customer Routes (Auth required, role customer) ───
