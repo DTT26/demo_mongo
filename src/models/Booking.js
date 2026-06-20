@@ -175,6 +175,11 @@ const bookingSchema = new mongoose.Schema(
     },
 
     // ─── Voucher ───
+    voucherCode: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     voucherId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Voucher',
@@ -184,6 +189,16 @@ const bookingSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: [0, 'Số tiền giảm giá không thể âm'],
+    },
+    originalAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Số tiền gốc không thể âm'],
+    },
+    finalAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Số tiền thanh toán cuối cùng không thể âm'],
     },
 
     // ─── Review ───
@@ -265,7 +280,11 @@ bookingSchema.methods.toPublicJSON = function () {
     status: this.status,
     depositAmount: this.depositAmount,
     depositPaid: this.depositPaid,
+    voucherCode: this.voucherCode,
+    voucherId: this.voucherId,
     discountAmount: this.discountAmount,
+    originalAmount: this.originalAmount,
+    finalAmount: this.finalAmount,
     sourceWaitlistId: this.sourceWaitlistId,
     tableNumbers: this.tableNumbers,
     reviewed: this.reviewed,
@@ -304,8 +323,11 @@ bookingSchema.methods.toAdminJSON = function () {
     actualGuestCount: this.actualGuestCount,
     tableNumbers: this.tableNumbers,
     internalNotes: this.internalNotes,
+    voucherCode: this.voucherCode,
     voucherId: this.voucherId,
     discountAmount: this.discountAmount,
+    originalAmount: this.originalAmount,
+    finalAmount: this.finalAmount,
     reviewId: this.reviewId,
     reviewed: this.reviewed,
     reminderSent: this.reminderSent,

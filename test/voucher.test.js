@@ -46,11 +46,14 @@ const callController = async (controller, req) => {
 };
 
 const cleanup = async (suffix) => {
-  await VoucherRedemption.deleteMany({});
-  await CustomerVoucher.deleteMany({});
-  await Voucher.deleteMany({ code: new RegExp(`^${suffix}`) });
+  const users = await User.find({ username: new RegExp(`^${suffix}`) }).distinct('_id');
+  const vouchers = await Voucher.find({ code: new RegExp(`^${suffix}`) }).distinct('_id');
+  
+  await CustomerVoucher.deleteMany({ customerId: { $in: users } });
+  await VoucherRedemption.deleteMany({ voucherId: { $in: vouchers } });
+  await Voucher.deleteMany({ _id: { $in: vouchers } });
   await Restaurant.deleteMany({ name: new RegExp(`^${suffix}`) });
-  await User.deleteMany({ username: new RegExp(`^${suffix}`) });
+  await User.deleteMany({ _id: { $in: users } });
 };
 
 test.before(async () => {
@@ -110,6 +113,7 @@ test('Voucher service and controller validation and checkout flow', async () => 
 
     // 2. Create Voucher (Percentage type)
     const voucherPercent = await Voucher.create({
+      name: '10% Discount Coupon',
       restaurantId: restaurant._id,
       code: `${suffix}_PCT10`,
       description: '10% discount',
@@ -165,9 +169,10 @@ test('Voucher service and controller validation and checkout flow', async () => 
     const getAvailRes = await callController(voucherRealController.getRestaurantVouchers, getAvailReq);
     assert.equal(getAvailRes.statusCode, 200);
     assert.equal(getAvailRes.body.success, true);
-    assert.equal(getAvailRes.body.data.length, 1);
-    assert.equal(getAvailRes.body.data[0].code, `${suffix}_PCT10`);
-    assert.equal(getAvailRes.body.data[0].isSaved, true); // Since customer saved it
+    
+    const myVouchers = getAvailRes.body.data.filter(v => v.code === `${suffix}_PCT10`);
+    assert.equal(myVouchers.length, 1);
+    assert.equal(myVouchers[0].isSaved, true); // Since customer saved it
 
   } finally {
     await cleanup(suffix);

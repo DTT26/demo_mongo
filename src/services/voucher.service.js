@@ -1,86 +1,212 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const Voucher = require('../models/Voucher');
 const CustomerVoucher = require('../models/CustomerVoucher');
 const VoucherRedemption = require('../models/VoucherRedemption');
-const mongoose = require('mongoose');
 const voucherCampaignService = require('./voucher-campaign.service');
+const VoucherAuditLog = require('../models/VoucherAuditLog');
+const Restaurant = require('../models/Restaurant');
+const validationService = require('./voucher.validation.service');
+
+/**
+ * Write a new entry to the VoucherAuditLog collection
+ */
+const logAudit = async ({
+  voucherId,
+  action,
+  actorId,
+  actorRole,
+  customerId = null,
+  bookingId = null,
+  paymentId = null,
+  ipAddress = null,
+  userAgent = null,
+  metadata = {},
+  result,
+  errorReason = null,
+}) => {
+  try {
+    await VoucherAuditLog.create({
+      voucherId,
+      action,
+      actorId,
+      actorRole,
+      customerId,
+      bookingId,
+      paymentId,
+      ipAddress,
+      userAgent,
+      metadata,
+      result,
+      errorReason,
+    });
+  } catch (error) {
+    console.error('❌ Failed to save VoucherAuditLog:', error.message);
+  }
+};
 
 /**
  * 1. Kiểm tra tính hợp lệ và tính số tiền giảm của Voucher
  */
-const validateVoucher = async (code, restaurantId, customerId, orderAmount, options = {}) => {
-  const readOnly = options?.readOnly === true;
+const validateVoucher = async (code, restaurantId, customerId, orderAmount, ipAddressOrOptions = null, options = {}) => {
+  let ipAddress = null;
+  let finalOptions = options;
+
+  if (ipAddressOrOptions && typeof ipAddressOrOptions === 'object') {
+    finalOptions = ipAddressOrOptions;
+  } else if (typeof ipAddressOrOptions === 'string') {
+    ipAddress = ipAddressOrOptions;
+  }
+
+  const readOnly = finalOptions?.readOnly === true;
+
   if (!code) {
     return { valid: false, reason: 'Mã voucher không được để trống', discountAmount: 0 };
   }
 
-  const voucher = await Voucher.findOne({
-    code: code.toUpperCase(),
-  });
-
-  if (!voucher) {
-    return { valid: false, reason: 'Mã giảm giá không tồn tại', discountAmount: 0 };
+  // 1a. Check Rate Limit
+  if (!readOnly) {
+    const rateLimitResult = validationService.checkRateLimit(ipAddress, customerId);
+    if (rateLimitResult.limited) {
+      return { valid: false, reason: rateLimitResult.reason, discountAmount: 0 };
+    }
   }
 
-  if (voucher.status !== 'active') {
-    let reason = 'Mã giảm giá hiện không hoạt động';
-    if (voucher.status === 'expired') reason = 'Mã giảm giá đã hết hạn';
-    if (voucher.status === 'paused') reason = 'Mã giảm giá đang tạm dừng';
-    if (voucher.status === 'disabled') reason = 'Mã giảm giá đã bị hủy';
-    return { valid: false, reason, discountAmount: 0 };
+  // 1b. Check Existence
+  const existResult = await validationService.checkExistence(code);
+  if (!existResult.valid) {
+    return { valid: false, reason: existResult.reason, discountAmount: 0 };
   }
+  const voucher = existResult.voucher;
 
-  const now = new Date();
-  if (voucher.startDate && now < voucher.startDate) {
-    return { valid: false, reason: 'Chương trình ưu đãi chưa bắt đầu', discountAmount: 0 };
-  }
-
-  if (voucher.endDate && now > voucher.endDate) {
-    // Tự động cập nhật expired nếu đã quá hạn
+  // 1c. Check Status
+  const statusResult = validationService.checkStatus(voucher);
+  if (!statusResult.valid) {
     if (!readOnly) {
-      voucher.status = 'expired';
-      await voucher.save();
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: statusResult.reason,
+      });
     }
-    return { valid: false, reason: 'Mã giảm giá đã hết hạn sử dụng', discountAmount: 0 };
+    return { valid: false, reason: statusResult.reason, discountAmount: 0 };
   }
 
-  // Kiểm tra phạm vi nhà hàng (nếu restaurantId của voucher khác null và khác restaurantId truyền vào)
-  if (voucher.restaurantId && restaurantId) {
-    if (voucher.restaurantId.toString() !== restaurantId.toString()) {
-      return { valid: false, reason: 'Mã giảm giá không áp dụng cho nhà hàng này', discountAmount: 0 };
+  // 1d. Check Date Range
+  const dateResult = await validationService.checkDateRange(voucher, finalOptions);
+  if (!dateResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: dateResult.reason,
+      });
     }
+    return { valid: false, reason: dateResult.reason, discountAmount: 0 };
   }
 
-  // Kiểm tra giá trị hóa đơn/đặt cọc tối thiểu
-  if (voucher.minOrderAmount && orderAmount < voucher.minOrderAmount) {
-    return { 
-      valid: false, 
-      reason: `Đơn hàng chưa đạt giá trị tối thiểu ${voucher.minOrderAmount.toLocaleString('vi-VN')} ₫`, 
-      discountAmount: 0 
-    };
-  }
-
-  // Kiểm tra giới hạn dùng toàn hệ thống
-  if (voucher.globalUsageLimit !== null) {
-    const totalRedemptions = await VoucherRedemption.countDocuments({ voucherId: voucher._id });
-    if (totalRedemptions >= voucher.globalUsageLimit) {
-      return { valid: false, reason: 'Mã giảm giá đã hết lượt sử dụng', discountAmount: 0 };
+  // 1e. Check Restaurant Scope
+  const scopeResult = await validationService.checkRestaurantScope(voucher, restaurantId);
+  if (!scopeResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: scopeResult.reason,
+      });
     }
+    return { valid: false, reason: scopeResult.reason, discountAmount: 0 };
   }
 
-  // Kiểm tra số lần sử dụng của khách hàng cụ thể này
-  if (voucher.perCustomerLimit !== null && customerId) {
-    const customerUsage = await VoucherRedemption.countDocuments({
-      voucherId: voucher._id,
-      customerId: customerId,
-    });
-    if (customerUsage >= voucher.perCustomerLimit) {
-      return { valid: false, reason: 'Bạn đã sử dụng hết số lần cho phép của mã này', discountAmount: 0 };
+  // 1f. Check Min Spend
+  const spendResult = validationService.checkMinSpend(voucher, orderAmount);
+  if (!spendResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: spendResult.reason,
+      });
     }
+    return { valid: false, reason: spendResult.reason, discountAmount: 0 };
   }
 
-  // Tính số tiền được giảm giá
+  // 1g. Check Global Limit
+  const globalResult = await validationService.checkGlobalLimit(voucher);
+  if (!globalResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId || voucher.createdBy,
+        actorRole: customerId ? 'customer' : 'system',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: globalResult.reason,
+      });
+    }
+    return { valid: false, reason: globalResult.reason, discountAmount: 0 };
+  }
+
+  // 1h. Check Per User Limit
+  const userResult = await validationService.checkPerUserLimit(voucher, customerId);
+  if (!userResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId,
+        actorRole: 'customer',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: userResult.reason,
+      });
+    }
+    return { valid: false, reason: userResult.reason, discountAmount: 0 };
+  }
+
+  // 1i. Check Customer Segment
+  const segmentResult = await validationService.checkCustomerSegment(voucher, customerId);
+  if (!segmentResult.valid) {
+    if (!readOnly) {
+      await logAudit({
+        voucherId: voucher._id,
+        action: 'validate',
+        actorId: customerId,
+        actorRole: 'customer',
+        customerId,
+        ipAddress,
+        result: 'failure',
+        errorReason: segmentResult.reason,
+      });
+    }
+    return { valid: false, reason: segmentResult.reason, discountAmount: 0 };
+  }
+
+  // Calculate discount amount
   let discountAmount = 0;
   if (voucher.discountType === 'percentage') {
     discountAmount = (orderAmount * voucher.discountValue) / 100;
@@ -91,9 +217,23 @@ const validateVoucher = async (code, restaurantId, customerId, orderAmount, opti
     discountAmount = voucher.discountValue;
   }
 
-  // Đảm bảo số tiền giảm không vượt quá tổng số tiền hóa đơn
+  // Ensure discount doesn't exceed orderAmount
   discountAmount = Math.min(discountAmount, orderAmount);
   discountAmount = Math.max(0, discountAmount);
+
+  // Success audit log
+  if (!readOnly) {
+    await logAudit({
+      voucherId: voucher._id,
+      action: 'validate',
+      actorId: customerId || voucher.createdBy,
+      actorRole: customerId ? 'customer' : 'system',
+      customerId,
+      ipAddress,
+      result: 'success',
+      metadata: { orderAmount, discountAmount },
+    });
+  }
 
   return { valid: true, reason: null, discountAmount, voucher };
 };
@@ -101,7 +241,7 @@ const validateVoucher = async (code, restaurantId, customerId, orderAmount, opti
 /**
  * 2. Lưu voucher vào ví khách hàng (Save/Claim)
  */
-const saveVoucherForCustomer = async (voucherId, customerId) => {
+const saveVoucherForCustomer = async (voucherId, customerId, source = 'manual_save') => {
   const voucher = await Voucher.findById(voucherId);
   if (!voucher) {
     throw new Error('Voucher không tồn tại');
@@ -116,6 +256,12 @@ const saveVoucherForCustomer = async (voucherId, customerId) => {
     throw new Error('Voucher đã hết hạn sử dụng');
   }
 
+  // Check user segment before saving
+  const segmentResult = await validationService.checkCustomerSegment(voucher, customerId);
+  if (!segmentResult.valid) {
+    throw new Error(segmentResult.reason);
+  }
+
   // Kiểm tra xem đã lưu chưa
   const existingSaved = await CustomerVoucher.findOne({ customerId, voucherId });
   if (existingSaved) {
@@ -123,69 +269,277 @@ const saveVoucherForCustomer = async (voucherId, customerId) => {
   }
 
   // Kiểm tra giới hạn lượt dùng toàn hệ thống
-  if (voucher.globalUsageLimit !== null) {
-    const totalRedemptions = await VoucherRedemption.countDocuments({ voucherId: voucher._id });
-    if (totalRedemptions >= voucher.globalUsageLimit) {
-      throw new Error('Voucher đã hết lượt sử dụng trên hệ thống');
-    }
+  const globalResult = await validationService.checkGlobalLimit(voucher);
+  if (!globalResult.valid) {
+    throw new Error(globalResult.reason);
   }
 
   const savedVoucher = new CustomerVoucher({
     customerId,
     voucherId,
+    status: 'saved',
+    source,
+    expiresAt: voucher.endDate,
   });
 
   await savedVoucher.save();
+
+  // Log audit
+  await logAudit({
+    voucherId,
+    action: 'save',
+    actorId: customerId,
+    actorRole: 'customer',
+    customerId,
+    result: 'success',
+  });
+
   return savedVoucher;
+};
+
+/**
+ * 2b. Xóa voucher khỏi ví khách hàng (Unsave)
+ */
+const unsaveVoucherForCustomer = async (voucherId, customerId) => {
+  const result = await CustomerVoucher.findOneAndDelete({ customerId, voucherId });
+  if (!result) {
+    throw new Error('Voucher không tồn tại trong ví của bạn');
+  }
+
+  // Log audit
+  await logAudit({
+    voucherId,
+    action: 'unsave',
+    actorId: customerId,
+    actorRole: 'customer',
+    customerId,
+    result: 'success',
+  });
+
+  return true;
 };
 
 /**
  * 3. Ghi nhận sử dụng Voucher (Redeem)
  */
-const redeemVoucher = async (code, restaurantId, customerId, orderAmount, bookingId, paymentId = null) => {
-  const validation = await validateVoucher(code, restaurantId, customerId, orderAmount);
-  if (!validation.valid) {
-    throw new Error(validation.reason);
+const redeemVoucher = async (code, restaurantId, customerId, orderAmount, bookingId, paymentId = null, options = {}) => {
+  const { ipAddress = null, userAgent = null } = options;
+
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+  } catch (err) {
+    session = null;
   }
 
-  const voucher = validation.voucher;
-  const discountAmount = validation.discountAmount;
-
-  // Tạo bản ghi VoucherRedemption
-  const redemption = new VoucherRedemption({
-    voucherId: voucher._id,
-    customerId,
-    bookingId,
-    paymentId,
-    discountApplied: discountAmount,
-    amountBefore: orderAmount,
-    amountAfter: orderAmount - discountAmount,
-  });
-  await redemption.save();
-
-  // Cập nhật CustomerVoucher của khách hàng (nếu họ đã lưu trước đó)
-  const customerVoucher = await CustomerVoucher.findOne({ customerId, voucherId: voucher._id });
-  if (customerVoucher) {
-    customerVoucher.timesUsed += 1;
-    customerVoucher.usedAt = new Date();
-    
-    if (voucher.perCustomerLimit !== null && customerVoucher.timesUsed >= voucher.perCustomerLimit) {
-      customerVoucher.isUsed = true;
+  try {
+    const validation = await validateVoucher(code, restaurantId, customerId, orderAmount, ipAddress);
+    if (!validation.valid) {
+      throw new Error(validation.reason);
     }
-    await customerVoucher.save();
-  } else {
-    // Nếu khách hàng chưa lưu voucher này nhưng nhập mã và sử dụng trực tiếp -> Tự tạo bản ghi CustomerVoucher đã dùng
-    const newCustomerVoucher = new CustomerVoucher({
-      customerId,
+
+    const voucher = validation.voucher;
+    const discountAmount = validation.discountAmount;
+
+    // Idempotency check: check if booking already has a completed redemption
+    const existingRedemption = await VoucherRedemption.findOne({
+      bookingId,
+      status: 'completed',
+    }).session(session);
+
+    if (existingRedemption) {
+      if (session) await session.commitTransaction();
+      return existingRedemption;
+    }
+
+    // Atomic increment of currentUsage and check
+    if (voucher.globalUsageLimit !== null) {
+      const updatedVoucher = await Voucher.findOneAndUpdate(
+        { _id: voucher._id, currentUsage: { $lt: voucher.globalUsageLimit } },
+        { $inc: { currentUsage: 1 } },
+        { new: true, session }
+      );
+      if (!updatedVoucher) {
+        throw new Error('Mã giảm giá đã hết lượt sử dụng ngay trước khi bạn hoàn tất đặt bàn');
+      }
+    } else {
+      await Voucher.updateOne({ _id: voucher._id }, { $inc: { currentUsage: 1 } }, { session });
+    }
+
+    // Tạo bản ghi VoucherRedemption
+    const redemption = new VoucherRedemption({
       voucherId: voucher._id,
-      isUsed: voucher.perCustomerLimit !== null && 1 >= voucher.perCustomerLimit,
-      timesUsed: 1,
+      customerId,
+      bookingId,
+      paymentId,
+      discountApplied: discountAmount,
+      amountBefore: orderAmount,
+      amountAfter: orderAmount - discountAmount,
+      channel: 'booking',
+      status: 'completed',
       usedAt: new Date(),
     });
-    await newCustomerVoucher.save();
+    await redemption.save({ session });
+
+    // Cập nhật CustomerVoucher của khách hàng (nếu họ đã lưu trước đó)
+    const customerVoucher = await CustomerVoucher.findOne({ customerId, voucherId: voucher._id }).session(session);
+    if (customerVoucher) {
+      customerVoucher.timesUsed += 1;
+      customerVoucher.usedAt = new Date();
+      customerVoucher.status = 'used';
+
+      if (voucher.perCustomerLimit !== null && customerVoucher.timesUsed >= voucher.perCustomerLimit) {
+        customerVoucher.isUsed = true;
+      }
+      await customerVoucher.save({ session });
+    } else {
+      // Tự tạo bản ghi CustomerVoucher đã dùng
+      const newCustomerVoucher = new CustomerVoucher({
+        customerId,
+        voucherId: voucher._id,
+        isUsed: voucher.perCustomerLimit !== null && 1 >= voucher.perCustomerLimit,
+        timesUsed: 1,
+        status: 'used',
+        source: 'auto_assign',
+        expiresAt: voucher.endDate,
+        usedAt: new Date(),
+      });
+      await newCustomerVoucher.save({ session });
+    }
+
+    // Ghi audit log
+    await logAudit({
+      voucherId: voucher._id,
+      action: 'redeem',
+      actorId: customerId,
+      actorRole: 'customer',
+      customerId,
+      bookingId,
+      paymentId,
+      ipAddress,
+      userAgent,
+      result: 'success',
+    });
+
+    if (session) {
+      await session.commitTransaction();
+    }
+
+    return redemption;
+  } catch (error) {
+    if (session) {
+      await session.abortTransaction();
+    }
+    // Log failure
+    const voucherDoc = await Voucher.findOne({ code: code.toUpperCase() });
+    if (voucherDoc) {
+      await logAudit({
+        voucherId: voucherDoc._id,
+        action: 'redeem',
+        actorId: customerId,
+        actorRole: 'customer',
+        customerId,
+        bookingId,
+        paymentId,
+        ipAddress,
+        userAgent,
+        result: 'failure',
+        errorReason: error.message,
+      });
+    }
+    throw error;
+  } finally {
+    if (session) {
+      session.endSession();
+    }
+  }
+};
+
+/**
+ * 3b. Hoàn nguyên Voucher (Reverse Redemption)
+ */
+const reverseRedemption = async (bookingId, reason, actor = null) => {
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+  } catch (err) {
+    session = null;
   }
 
-  return redemption;
+  try {
+    const redemption = await VoucherRedemption.findOne({
+      bookingId,
+      status: 'completed',
+    }).session(session);
+
+    if (!redemption) {
+      if (session) await session.commitTransaction();
+      return null; // No redemption to reverse
+    }
+
+    // Check cutoff time (only reverse if used within 30 minutes, or allow admin to override)
+    const timeDiffMinutes = (Date.now() - new Date(redemption.usedAt).getTime()) / (1000 * 60);
+    const actorRole = actor ? actor.role : 'system';
+
+    if (timeDiffMinutes > 30 && actorRole !== 'admin') {
+      throw new Error('Không thể hoàn lại voucher sau 30 phút sử dụng ngoại trừ bởi Admin');
+    }
+
+    // Set redemption status to reversed
+    redemption.status = 'reversed';
+    redemption.reversedAt = new Date();
+    redemption.reversedReason = reason || 'Hủy đặt bàn';
+    await redemption.save({ session });
+
+    // Decrement currentUsage in Voucher
+    await Voucher.updateOne(
+      { _id: redemption.voucherId },
+      { $inc: { currentUsage: -1 } },
+      { session }
+    );
+
+    // Update CustomerVoucher
+    const customerVoucher = await CustomerVoucher.findOne({
+      customerId: redemption.customerId,
+      voucherId: redemption.voucherId,
+    }).session(session);
+
+    if (customerVoucher) {
+      customerVoucher.timesUsed = Math.max(0, customerVoucher.timesUsed - 1);
+      customerVoucher.isUsed = false;
+      customerVoucher.status = 'saved';
+      await customerVoucher.save({ session });
+    }
+
+    // Log audit
+    await logAudit({
+      voucherId: redemption.voucherId,
+      action: 'reverse',
+      actorId: actor ? actor._id : redemption.customerId,
+      actorRole: actor ? actor.role : 'system',
+      customerId: redemption.customerId,
+      bookingId,
+      result: 'success',
+      metadata: { reason, timeDiffMinutes },
+    });
+
+    if (session) {
+      await session.commitTransaction();
+    }
+
+    return redemption;
+  } catch (error) {
+    if (session) {
+      await session.abortTransaction();
+    }
+    throw error;
+  } finally {
+    if (session) {
+      session.endSession();
+    }
+  }
 };
 
 /**
@@ -195,35 +549,48 @@ const getCustomerVouchers = async (customerId, filter = 'all') => {
   const query = { customerId };
   const now = new Date();
 
+  // Find all CustomerVouchers
   const saved = await CustomerVoucher.find(query)
     .populate({
       path: 'voucherId',
       populate: {
         path: 'restaurantId',
-        select: 'name address logo images',
-      }
+        select: 'name address logo images cuisineTypes',
+      },
     })
     .sort({ createdAt: -1 });
 
-  return saved.filter(item => {
+  const results = [];
+  for (const item of saved) {
+    if (!item.voucherId) continue;
+
     const v = item.voucherId;
-    if (!v) return false;
+    let currentStatus = item.status;
 
-    // Phân loại bộ lọc
+    // Check expiration dynamically
     const isExpired = v.endDate && now > v.endDate;
-    const isInactiveOrDisabled = ['expired', 'disabled'].includes(v.status);
+    if (isExpired && item.status !== 'expired' && !item.isUsed) {
+      item.status = 'expired';
+      await item.save();
+      currentStatus = 'expired';
+    }
 
+    let matchesFilter = false;
     if (filter === 'unused') {
-      return !item.isUsed && !isExpired && !isInactiveOrDisabled && v.status === 'active';
+      matchesFilter = !item.isUsed && currentStatus === 'saved' && v.status === 'active';
+    } else if (filter === 'used') {
+      matchesFilter = item.isUsed || currentStatus === 'used';
+    } else if (filter === 'expired') {
+      matchesFilter = currentStatus === 'expired' || v.status === 'expired';
+    } else {
+      matchesFilter = true; // 'all'
     }
-    if (filter === 'used') {
-      return item.isUsed;
+
+    if (matchesFilter) {
+      results.push(item);
     }
-    if (filter === 'expired') {
-      return isExpired || v.status === 'expired';
-    }
-    return true; // 'all'
-  });
+  }
+  return results;
 };
 
 /**
@@ -231,7 +598,7 @@ const getCustomerVouchers = async (customerId, filter = 'all') => {
  */
 const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) => {
   const now = new Date();
-  
+
   // Tìm các voucher active của riêng nhà hàng này HOẶC voucher Global (restaurantId = null)
   const vouchers = await Voucher.find({
     status: 'active',
@@ -273,7 +640,6 @@ const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) =
   if (customerId) {
     const savedVoucherIds = await CustomerVoucher.find({ customerId })
       .distinct('voucherId');
-    
     return annotated.map(item => {
       item.isSaved = savedVoucherIds.some(id => id.toString() === item._id.toString());
       return item;
@@ -287,13 +653,18 @@ const getAvailableRestaurantVouchers = async (restaurantId, customerId = null) =
  * 6. Thống kê hiệu quả voucher cho chủ nhà hàng (Owner)
  */
 const getVoucherStats = async (voucherId, restaurantId) => {
-  const voucher = await Voucher.findOne({ _id: voucherId, restaurantId });
+  const query = { _id: voucherId };
+  if (restaurantId) query.restaurantId = restaurantId;
+
+  const voucher = await Voucher.findOne(query);
   if (!voucher) {
     throw new Error('Voucher không tồn tại hoặc không thuộc quyền quản lý của bạn');
   }
 
   const savedCount = await CustomerVoucher.countDocuments({ voucherId });
-  const redemptions = await VoucherRedemption.find({ voucherId });
+  const redemptions = await VoucherRedemption.find({ voucherId, status: 'completed' })
+    .populate('customerId', 'fullName email phoneNumber');
+
   const usedCount = redemptions.length;
   const totalDiscount = redemptions.reduce((acc, curr) => acc + curr.discountApplied, 0);
 
@@ -306,19 +677,23 @@ const getVoucherStats = async (voucherId, restaurantId) => {
     totalDiscount,
     redemptions: redemptions.map(r => ({
       bookingId: r.bookingId,
-      customerId: r.customerId,
+      customerId: r.customerId?._id,
+      customerName: r.customerId?.fullName || 'Khách hàng',
       discountApplied: r.discountApplied,
       amountBefore: r.amountBefore,
       amountAfter: r.amountAfter,
-      usedAt: r.usedAt
-    }))
+      usedAt: r.usedAt,
+    })),
   };
 };
 
 module.exports = {
+  logAudit,
   validateVoucher,
   saveVoucherForCustomer,
+  unsaveVoucherForCustomer,
   redeemVoucher,
+  reverseRedemption,
   getCustomerVouchers,
   getAvailableRestaurantVouchers,
   getVoucherStats,

@@ -85,4 +85,10 @@ router.get(   '/waitlists/stats',      adminWaitlistController.getStats);
 router.get(   '/waitlists/:id',        adminWaitlistController.getWaitlistById);
 router.patch( '/waitlists/:id/status', adminWaitlistController.updateWaitlistStatus);
 
+// ─── Reviews Management ───
+const adminReviewController = require('../controllers/admin.review.controller');
+router.get(   '/reviews/reported',     adminReviewController.getReportedReviews);
+router.put(   '/reviews/:id/hide',     adminReviewController.hideReview);
+router.put(   '/reviews/:id/restore',  adminReviewController.restoreReview);
+
 module.exports = router;

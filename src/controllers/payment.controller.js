@@ -255,6 +255,9 @@ exports.createPayment = async (req, res) => {
       description,
       metadata,
       status: 'pending',
+      voucherId: targetType === 'booking' ? (booking.voucherId?._id || booking.voucherId) : null,
+      discountApplied: targetType === 'booking' ? (booking.discountAmount || 0) : 0,
+      amountBeforeDiscount: targetType === 'booking' ? (booking.depositAmount || 0) : amount,
     });
 
     try {

@@ -76,6 +76,11 @@ router.get('/:restaurantId/services', async (req, res) => {
   }
 });
 
+// ─── Public Reviews ───
+const reviewController = require('../controllers/review.controller');
+router.get('/:restaurantId/reviews', reviewController.getRestaurantReviews);
+router.get('/:restaurantId/rating-summary', reviewController.getRatingSummary);
+
 // Public route to view single restaurant detail
 router.get('/:id', restaurantController.getRestaurantById);
 

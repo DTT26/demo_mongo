@@ -139,6 +139,16 @@ const updateBookingStatus = async (req, res) => {
       booking.cancelledBy = 'admin';
       booking.cancelledAt = new Date();
       booking.cancellationReason = note || 'Admin cancelled';
+      
+      // Reverse voucher redemption if any
+      if (booking.voucherId) {
+        try {
+          const voucherService = require('../services/voucher.service');
+          await voucherService.reverseRedemption(booking._id, note || 'Admin hủy đặt bàn', req.user);
+        } catch (reverseErr) {
+          console.error('❌ Lỗi hoàn nguyên voucher khi admin hủy đặt bàn:', reverseErr.message);
+        }
+      }
     } else if (status === 'confirmed') {
       booking.confirmedBy = req.user._id;
       booking.confirmedAt = new Date();

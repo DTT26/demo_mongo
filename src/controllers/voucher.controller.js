@@ -1,7 +1,8 @@
 'use strict';
 
 const Voucher = require('../models/Voucher');
-const Restaurant = require('../models/Restaurant');
+const CustomerVoucher = require('../models/CustomerVoucher');
+const VoucherRedemption = require('../models/VoucherRedemption');
 const voucherService = require('../services/voucher.service');
 const voucherCampaignService = require('../services/voucher-campaign.service');
 const { assertOwnerRestaurant } = require('../services/plan-gating.service');
@@ -15,33 +16,65 @@ const sendNotification = (promise, label) => {
   });
 };
 
-// ─── POST /api/v1/vouchers/validate ───
+/**
+ * 1. Validate voucher code for checkout preview
+ * POST /api/v1/vouchers/validate
+ */
 exports.validateVoucherForBooking = async (req, res) => {
   try {
     const { code, restaurantId, orderAmount } = req.body;
     const customerId = req.user ? req.user._id : null;
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    const result = await voucherService.validateVoucher(code, restaurantId, customerId, orderAmount);
+    const result = await voucherService.validateVoucher(
+      code,
+      restaurantId,
+      customerId,
+      orderAmount,
+      ipAddress
+    );
     return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── POST /api/v1/vouchers/save ───
+/**
+ * 2. Save voucher to customer's wallet
+ * POST /api/v1/vouchers/save
+ */
 exports.saveVoucher = async (req, res) => {
   try {
     const { voucherId } = req.body;
     const customerId = req.user._id;
 
-    const saved = await voucherService.saveVoucherForCustomer(voucherId, customerId);
+    const saved = await voucherService.saveVoucherForCustomer(voucherId, customerId, 'manual_save');
     return res.status(200).json({ success: true, message: 'Đã lưu voucher vào ví thành công', data: saved });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
 };
 
-// ─── GET /api/v1/vouchers/my-vouchers ───
+/**
+ * 3. Unsave voucher from customer's wallet
+ * DELETE /api/v1/vouchers/unsave/:voucherId
+ */
+exports.unsaveVoucher = async (req, res) => {
+  try {
+    const { voucherId } = req.params;
+    const customerId = req.user._id;
+
+    await voucherService.unsaveVoucherForCustomer(voucherId, customerId);
+    return res.status(200).json({ success: true, message: 'Đã bỏ lưu voucher thành công.' });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 4. Get customer's saved vouchers wallet
+ * GET /api/v1/vouchers/my-vouchers
+ */
 exports.getMyVouchers = async (req, res) => {
   try {
     const customerId = req.user._id;
@@ -54,7 +87,108 @@ exports.getMyVouchers = async (req, res) => {
   }
 };
 
-// ─── GET /api/v1/vouchers/restaurant/:restaurantId ───
+/**
+ * 5. Get customer's voucher redemption history
+ * GET /api/v1/vouchers/my-history
+ */
+exports.getMyVouchersHistory = async (req, res) => {
+  try {
+    const customerId = req.user._id;
+    const { page = 1, limit = 10 } = req.query;
+
+    const skipIndex = (parseInt(page) - 1) * parseInt(limit);
+
+    const [redemptions, total] = await Promise.all([
+      VoucherRedemption.find({ customerId, status: 'completed' })
+        .populate({
+          path: 'voucherId',
+          populate: {
+            path: 'restaurantId',
+            select: 'name address logo images',
+          },
+        })
+        .populate('bookingId', 'bookingDate bookingTime numberOfGuests status')
+        .sort({ usedAt: -1 })
+        .skip(skipIndex)
+        .limit(parseInt(limit)),
+      VoucherRedemption.countDocuments({ customerId, status: 'completed' }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: redemptions,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 6. Get platform-wide active vouchers
+ * GET /api/v1/vouchers/platform
+ */
+exports.getPlatformVouchers = async (req, res) => {
+  try {
+    const now = new Date();
+    const { page = 1, limit = 10 } = req.query;
+
+    const filter = {
+      type: 'platform',
+      status: 'active',
+      startDate: { $lte: now },
+      $or: [
+        { endDate: null },
+        { endDate: { $gte: now } },
+      ],
+    };
+
+    const skipIndex = (parseInt(page) - 1) * parseInt(limit);
+
+    const [vouchers, total] = await Promise.all([
+      Voucher.find(filter)
+        .sort({ priority: -1, createdAt: -1 })
+        .skip(skipIndex)
+        .limit(parseInt(limit)),
+      Voucher.countDocuments(filter),
+    ]);
+
+    // If user is logged in, attach isSaved flag
+    let savedVoucherIds = [];
+    if (req.user) {
+      savedVoucherIds = await CustomerVoucher.find({ customerId: req.user._id }).distinct('voucherId');
+    }
+
+    const modifiedVouchers = vouchers.map(v => {
+      const item = v.toObject();
+      item.isSaved = savedVoucherIds.some(id => id.toString() === v._id.toString());
+      return item;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: modifiedVouchers,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * 7. Get available vouchers at a specific restaurant
+ * GET /api/v1/vouchers/restaurant/:restaurantId
+ */
 exports.getRestaurantVouchers = async (req, res) => {
   try {
     const { restaurantId } = req.params;
@@ -78,180 +212,72 @@ exports.getHomepageVoucherCampaigns = async (req, res) => {
   }
 };
 
-// ─── POST /api/v1/owner/vouchers (Owner tạo voucher của mình) ───
-exports.createVoucher = async (req, res) => {
+/**
+ * 8. Get specific voucher details (Public info)
+ * GET /api/v1/vouchers/:id
+ */
+exports.getVoucherById = async (req, res) => {
   try {
-    const userId = req.user._id;
-    const userRole = req.user.role;
-    const { 
-      code, 
-      description, 
-      discountType, 
-      discountValue, 
-      maxDiscountAmount, 
-      minOrderAmount, 
-      startDate, 
-      endDate, 
-      globalUsageLimit, 
-      perCustomerLimit, 
-      restaurantId 
-    } = req.body;
+    const { id } = req.params;
+    const voucher = await Voucher.findById(id).populate('restaurantId', 'name address logo images');
+    if (!voucher || voucher.status === 'disabled') {
+      return res.status(404).json({ success: false, message: 'Voucher không tồn tại hoặc đã bị dừng hoạt động.' });
+    }
 
-    let finalRestaurantId = null;
-    if (isOwnerRole(userRole)) {
-      const restaurant = await Restaurant.findOne({ ownerId: userId });
-      if (!restaurant) {
-        return res.status(403).json({ success: false, message: 'Bạn không sở hữu nhà hàng nào để tạo voucher.' });
+    const item = voucher.toObject();
+    if (req.user) {
+      const saved = await CustomerVoucher.findOne({ customerId: req.user._id, voucherId: id });
+      item.isSaved = !!saved;
+      if (saved) {
+        item.isUsed = saved.isUsed;
+        item.timesUsed = saved.timesUsed;
       }
-      finalRestaurantId = restaurant._id;
-    } else if (userRole === 'admin') {
-      finalRestaurantId = restaurantId || null;
-    } else {
-      return res.status(403).json({ success: false, message: 'Bạn không có quyền tạo voucher.' });
     }
 
-    const existing = await Voucher.findOne({ code: code.toUpperCase() });
-    if (existing) {
-      return res.status(400).json({ success: false, message: 'Mã voucher này đã tồn tại trên hệ thống.' });
-    }
+    return res.status(200).json({ success: true, data: item });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
-    const voucher = new Voucher({
-      code: code.toUpperCase(),
-      description,
-      discountType,
-      discountValue,
-      maxDiscountAmount,
-      minOrderAmount,
-      startDate: startDate || new Date(),
-      endDate: endDate || null,
-      globalUsageLimit: globalUsageLimit !== undefined && globalUsageLimit !== '' ? globalUsageLimit : null,
-      perCustomerLimit: perCustomerLimit || 1,
-      restaurantId: finalRestaurantId,
-      createdBy: userId,
-    });
+/**
+ * 9. Internal API to redeem voucher (called when booking gets confirmed/paid)
+ * POST /api/v1/internal/vouchers/redeem
+ */
+exports.redeemVoucherInternal = async (req, res) => {
+  try {
+    const { code, restaurantId, customerId, orderAmount, bookingId, paymentId } = req.body;
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
 
-    await voucher.save();
-    const restaurant = finalRestaurantId ? await Restaurant.findById(finalRestaurantId) : null;
-    sendNotification(
-      notificationService.notifyVoucherCreated(req.app?.get?.('io') || null, {
-        voucher,
-        restaurant,
-        createdByRole: userRole,
-      }),
-      'created'
+    const redemption = await voucherService.redeemVoucher(
+      code,
+      restaurantId,
+      customerId,
+      orderAmount,
+      bookingId,
+      paymentId,
+      { ipAddress, userAgent }
     );
-    return res.status(201).json({ success: true, message: 'Tạo voucher thành công', data: voucher });
+
+    return res.status(200).json({ success: true, data: redemption });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 };
 
-// ─── PUT /api/v1/vouchers/:id ───
-exports.updateVoucher = async (req, res) => {
+/**
+ * 10. Internal API to reverse voucher usage (called when booking gets cancelled before confirm)
+ * POST /api/v1/internal/vouchers/reverse
+ */
+exports.reverseVoucherInternal = async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user._id;
-    const userRole = req.user.role;
-    const { description, endDate, status } = req.body;
+    const { bookingId, reason } = req.body;
+    const actor = req.user || null;
 
-    const voucher = await Voucher.findById(id);
-    if (!voucher) {
-      return res.status(404).json({ success: false, message: 'Voucher không tồn tại' });
-    }
-
-    if (isOwnerRole(userRole)) {
-      const restaurant = await Restaurant.findOne({ ownerId: userId });
-      if (!restaurant || (voucher.restaurantId && voucher.restaurantId.toString() !== restaurant._id.toString())) {
-        return res.status(403).json({ success: false, message: 'Bạn không có quyền chỉnh sửa voucher này.' });
-      }
-    }
-
-    if (description !== undefined) voucher.description = description;
-    if (endDate !== undefined) voucher.endDate = endDate;
-    if (status !== undefined) voucher.status = status;
-
-    await voucher.save();
-    return res.status(200).json({ success: true, message: 'Cập nhật voucher thành công', data: voucher });
+    const redemption = await voucherService.reverseRedemption(bookingId, reason, actor);
+    return res.status(200).json({ success: true, message: 'Hoàn nguyên voucher thành công.', data: redemption });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ─── DELETE /api/v1/vouchers/:id ───
-exports.deleteVoucher = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user._id;
-    const userRole = req.user.role;
-
-    const voucher = await Voucher.findById(id);
-    if (!voucher) {
-      return res.status(404).json({ success: false, message: 'Voucher không tồn tại' });
-    }
-
-    if (isOwnerRole(userRole)) {
-      const restaurant = await Restaurant.findOne({ ownerId: userId });
-      if (!restaurant || (voucher.restaurantId && voucher.restaurantId.toString() !== restaurant._id.toString())) {
-        return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa voucher này.' });
-      }
-    }
-
-    voucher.status = 'disabled';
-    await voucher.save();
-
-    return res.status(200).json({ success: true, message: 'Đã vô hiệu hóa voucher thành công' });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ─── GET /api/v1/vouchers/:id/stats ───
-exports.getVoucherStats = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const userId = req.user._id;
-    const userRole = req.user.role;
-
-    let restaurantId = null;
-    if (isOwnerRole(userRole)) {
-      const restaurant = await Restaurant.findOne({ ownerId: userId });
-      if (!restaurant) {
-        return res.status(403).json({ success: false, message: 'Bạn không sở hữu nhà hàng nào.' });
-      }
-      restaurantId = restaurant._id.toString();
-    }
-
-    const stats = await voucherService.getVoucherStats(id, restaurantId);
-    return res.status(200).json({ success: true, data: stats });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ─── GET /api/v1/owner/vouchers ───
-exports.getOwnerVouchers = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const restaurant = req.query.restaurantId
-      ? await assertOwnerRestaurant(userId, req.query.restaurantId)
-      : await Restaurant.findOne({ ownerId: userId });
-    if (!restaurant) {
-      return res.status(404).json({ success: false, message: 'Bạn chưa có nhà hàng.' });
-    }
-
-    const vouchers = await Voucher.find({ restaurantId: restaurant._id }).sort({ createdAt: -1 });
-    return res.status(200).json({ success: true, data: vouchers });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// ─── GET /api/v1/admin/vouchers ───
-exports.getAdminVouchers = async (req, res) => {
-  try {
-    const vouchers = await Voucher.find().populate('restaurantId', 'name').sort({ createdAt: -1 });
-    return res.status(200).json({ success: true, data: vouchers });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 };
