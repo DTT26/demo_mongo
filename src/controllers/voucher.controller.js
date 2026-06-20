@@ -3,6 +3,8 @@
 const Voucher = require('../models/Voucher');
 const Restaurant = require('../models/Restaurant');
 const voucherService = require('../services/voucher.service');
+const voucherCampaignService = require('../services/voucher-campaign.service');
+const { assertOwnerRestaurant } = require('../services/plan-gating.service');
 const notificationService = require('../services/notification.service');
 
 const isOwnerRole = (role) => role === 'restaurant_owner' || role === 'owner';
@@ -60,6 +62,17 @@ exports.getRestaurantVouchers = async (req, res) => {
 
     const list = await voucherService.getAvailableRestaurantVouchers(restaurantId, customerId);
     return res.status(200).json({ success: true, data: list });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getHomepageVoucherCampaigns = async (req, res) => {
+  try {
+    const data = await voucherCampaignService.getHomepageVoucherCampaigns({
+      limit: req.query.limit,
+    });
+    return res.status(200).json({ success: true, data });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -219,7 +232,9 @@ exports.getVoucherStats = async (req, res) => {
 exports.getOwnerVouchers = async (req, res) => {
   try {
     const userId = req.user._id;
-    const restaurant = await Restaurant.findOne({ ownerId: userId });
+    const restaurant = req.query.restaurantId
+      ? await assertOwnerRestaurant(userId, req.query.restaurantId)
+      : await Restaurant.findOne({ ownerId: userId });
     if (!restaurant) {
       return res.status(404).json({ success: false, message: 'Bạn chưa có nhà hàng.' });
     }

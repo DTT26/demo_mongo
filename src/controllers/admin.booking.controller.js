@@ -3,6 +3,7 @@
 const Booking = require('../models/Booking');
 const bookingService = require('../services/booking.service');
 const notificationService = require('../services/notification.service');
+const bookingCommissionService = require('../services/booking-commission.service');
 
 const sendNotification = (promise, label) => {
   Promise.resolve(promise).catch((error) => {
@@ -152,6 +153,20 @@ const updateBookingStatus = async (req, res) => {
     await booking.save();
 
     // Re-fetch with populated data to return full details
+    if (status === 'completed') {
+      await bookingCommissionService.createLedgerForBooking(booking._id, {
+        booking,
+        source: booking.sourceAiPendingActionId ? 'ai_booking_admin_completed' : 'admin_booking_completed',
+      });
+    } else if (status === 'cancelled') {
+      bookingCommissionService.markCancelledForBooking(
+        booking._id,
+        `Admin huỷ booking trước khi phí trở thành khoản phải thu: ${note}`
+      ).catch((error) => {
+        console.warn(`[BookingCommission/admin-cancelled] ${error.message}`);
+      });
+    }
+
     const updatedBooking = await Booking.findById(booking._id)
       .populate('customerId', 'fullName email phoneNumber avatarUrl')
       .populate('restaurantId', 'name address phoneNumber logo')

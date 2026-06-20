@@ -1,40 +1,141 @@
-// ─────────────────────────────────────────────
-// Payment Controller
-// ─────────────────────────────────────────────
 const Payment = require('../models/Payment');
 const Transaction = require('../models/Transaction');
 const Booking = require('../models/Booking');
 const Subscription = require('../models/Subscription');
 const Restaurant = require('../models/Restaurant');
+const FeaturedPlacement = require('../models/FeaturedPlacement');
+const VoucherCampaignPurchase = require('../models/VoucherCampaignPurchase');
 const payosService = require('../services/payos.service');
 const notificationService = require('../services/notification.service');
-const { SUBSCRIPTION_PLANS } = require('../config/payos.config');
+const voucherService = require('../services/voucher.service');
+const featuredPlacementService = require('../services/featured-placement.service');
+const voucherCampaignService = require('../services/voucher-campaign.service');
+const { expirePendingPayments } = require('../services/payment-lifecycle.service');
+const {
+  payosConfig,
+  SUBSCRIPTION_PLANS,
+  PLAN_ORDER,
+  getPlanCode,
+  getPlanInfo,
+} = require('../config/payos.config');
 
-// ─── Tạo mã orderCode duy nhất ───
+const MIN_PAYMENT_AMOUNT = 1000;
+
 const generateOrderCode = async () => {
-  // Sử dụng timestamp kết hợp random để đảm bảo duy nhất và là số nguyên dương
   let orderCode;
   let exists = true;
   while (exists) {
     orderCode = Math.floor(Date.now() / 1000) * 100 + Math.floor(Math.random() * 100);
-    // PayOS orderCode phải nằm trong khoảng 1 - 9007199254740991
     if (orderCode > 9007199254740991) {
       orderCode = Math.floor(Math.random() * 9007199254740991) + 1;
     }
     const found = await Payment.findOne({ orderCode });
-    if (!found) exists = false;
+    exists = Boolean(found);
   }
   return orderCode;
 };
 
-// ─── POST /api/v1/payments/create ───
+const getPaymentPlanCode = (paymentOrMetadata) => getPlanCode(
+  paymentOrMetadata?.metadata?.toPlan
+  || paymentOrMetadata?.metadata?.planCode
+  || paymentOrMetadata?.metadata?.plan
+  || paymentOrMetadata?.toPlan
+  || paymentOrMetadata?.planCode
+  || paymentOrMetadata?.plan
+);
+
+const getCurrentActiveSubscription = (restaurantId, now = new Date()) => Subscription.findOne({
+  restaurantId,
+  status: 'active',
+  $or: [
+    { currentPeriodEnd: { $gt: now } },
+    { expiredAt: { $gt: now } },
+  ],
+}).sort({ currentPeriodEnd: -1, expiredAt: -1, createdAt: -1 });
+
+const expireOldPendingPayments = async ({ userId, targetType, targetId }) => {
+  await expirePendingPayments({ userId, targetType, targetId });
+};
+
+const findReusablePendingPayment = async ({ userId, targetType, targetId, metadata }) => {
+  await expireOldPendingPayments({ userId, targetType, targetId });
+
+  const pendingPayments = await Payment.find({
+    userId,
+    targetType,
+    targetId,
+    status: 'pending',
+    $or: [
+      { expiredAt: null },
+      { expiredAt: { $gt: new Date() } },
+    ],
+  }).sort({ createdAt: -1 });
+
+  if (!pendingPayments.length) return null;
+
+  if (targetType !== 'subscription') {
+    return pendingPayments.find((payment) => payment.checkoutUrl) || null;
+  }
+
+  const requestedPlan = getPaymentPlanCode(metadata);
+  const reusable = pendingPayments.find((payment) => (
+    payment.checkoutUrl && getPaymentPlanCode(payment) === requestedPlan
+  ));
+
+  const stalePayments = pendingPayments.filter((payment) => String(payment._id) !== String(reusable?._id));
+  await Promise.all(stalePayments.map(async (payment) => {
+    payment.status = 'cancelled';
+    payment.cancelledAt = new Date();
+    await payment.save();
+  }));
+
+  return reusable || null;
+};
+
+const createZeroDepositBookingSuccess = async (booking, res) => {
+  booking.depositPaid = true;
+  booking.depositPaidAt = new Date();
+  booking.status = 'confirmed';
+  booking.statusHistory.push({
+    status: 'confirmed',
+    changedAt: new Date(),
+    note: 'Deposit waived by voucher discount',
+  });
+  await booking.save();
+
+  if (booking.voucherId) {
+    try {
+      await voucherService.redeemVoucher(
+        booking.voucherId.code,
+        booking.restaurantId?._id || booking.restaurantId,
+        booking.customerId,
+        booking.depositAmount,
+        booking._id,
+        null
+      );
+    } catch (error) {
+      console.error('Zero-deposit voucher redeem error:', error.message);
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Deposit confirmed without payment because voucher covered the full amount.',
+    data: {
+      status: 'paid',
+      amount: 0,
+      bookingId: booking._id,
+    },
+  });
+};
+
 exports.createPayment = async (req, res) => {
   try {
     const { targetType, targetId } = req.body;
     const userId = req.user._id;
 
     if (!targetType || !targetId) {
-      return res.status(400).json({ success: false, message: 'targetType và targetId là bắt buộc.' });
+      return res.status(400).json({ success: false, message: 'targetType and targetId are required.' });
     }
 
     let amount = 0;
@@ -42,145 +143,108 @@ exports.createPayment = async (req, res) => {
     let restaurantId = null;
     let metadata = {};
 
-    // ─── Tính tiền theo loại ───
     if (targetType === 'booking') {
-      const booking = await Booking.findById(targetId).populate('restaurantId');
+      const booking = await Booking.findById(targetId).populate('restaurantId').populate('voucherId');
       if (!booking) {
-        return res.status(404).json({ success: false, message: 'Booking không tồn tại.' });
+        return res.status(404).json({ success: false, message: 'Booking not found.' });
       }
-      if (booking.customerId.toString() !== userId.toString()) {
-        return res.status(403).json({ success: false, message: 'Bạn không có quyền thanh toán booking này.' });
+      if (String(booking.customerId) !== String(userId)) {
+        return res.status(403).json({ success: false, message: 'You cannot pay for this booking.' });
       }
       if (booking.depositPaid) {
-        return res.status(400).json({ success: false, message: 'Booking này đã được thanh toán đặt cọc.' });
+        return res.status(400).json({ success: false, message: 'Booking deposit was already paid.' });
       }
-      amount = (booking.depositAmount || 0) - (booking.discountAmount || 0);
-      amount = Math.max(0, amount);
-      if (amount <= 0) {
-        // Miễn cọc do giảm giá voucher lớn hơn hoặc bằng tiền cọc
-        booking.depositPaid = true;
-        booking.depositPaidAt = new Date();
-        booking.status = 'confirmed';
-        booking.statusHistory.push({
-          status: 'confirmed',
-          changedAt: new Date(),
-          note: 'Áp dụng mã giảm giá, miễn cọc hoàn toàn',
-        });
-        await booking.save();
 
-        if (booking.voucherId) {
-          try {
-            const voucherService = require('../services/voucher.service');
-            await voucherService.redeemVoucher(
-              booking.voucherId.code,
-              booking.restaurantId?._id || booking.restaurantId,
-              booking.customerId,
-              booking.depositAmount,
-              booking._id,
-              null
-            );
-          } catch (e) {
-            console.error('Lỗi redeem voucher miễn cọc:', e.message);
-          }
-        }
+      amount = Math.max((booking.depositAmount || 0) - (booking.discountAmount || 0), 0);
+      if (amount <= 0) return createZeroDepositBookingSuccess(booking, res);
 
-        return res.status(200).json({
-          success: true,
-          message: 'Đặt cọc đã được xác nhận miễn phí nhờ mã giảm giá.',
-          data: {
-            status: 'paid',
-            amount: 0,
-            bookingId: booking._id,
-          }
-        });
-      }
-      description = `Đặt cọc bàn #${booking._id.toString().slice(-6).toUpperCase()}`;
+      description = `Dat coc ban #${booking._id.toString().slice(-6).toUpperCase()}`;
       restaurantId = booking.restaurantId?._id || booking.restaurantId;
-      metadata = { bookingDate: booking.bookingDate, numberOfGuests: booking.numberOfGuests };
-
+      metadata = {
+        bookingDate: booking.bookingDate,
+        numberOfGuests: booking.numberOfGuests,
+      };
     } else if (targetType === 'subscription') {
-      // targetId ở đây là restaurantId
-      const restaurant = await Restaurant.findById(targetId);
+      const restaurant = await Restaurant.findById(targetId).select('_id ownerId name');
       if (!restaurant) {
-        return res.status(404).json({ success: false, message: 'Nhà hàng không tồn tại.' });
+        return res.status(404).json({ success: false, message: 'Restaurant not found.' });
       }
-      if (restaurant.ownerId.toString() !== userId.toString()) {
-        return res.status(403).json({ success: false, message: 'Bạn không phải chủ nhà hàng này.' });
+      if (String(restaurant.ownerId) !== String(userId)) {
+        return res.status(403).json({
+          success: false,
+          code: 'OWNER_RESTAURANT_FORBIDDEN',
+          message: 'Restaurant does not belong to this owner.',
+        });
       }
 
-      const { plan } = req.body; // 'plus' hoặc 'pro'
-      if (!plan || !SUBSCRIPTION_PLANS[plan]) {
-        return res.status(400).json({ success: false, message: 'Gói dịch vụ không hợp lệ. Chọn plus hoặc pro.' });
+      const plan = getPlanCode(req.body.planCode || req.body.plan);
+      const planInfo = getPlanInfo(plan);
+      if (!planInfo) {
+        return res.status(400).json({ success: false, message: 'Invalid subscription plan.' });
       }
-
-      const planInfo = SUBSCRIPTION_PLANS[plan];
       if (planInfo.price <= 0) {
-        return res.status(400).json({ success: false, message: 'Gói Free không cần thanh toán.' });
+        return res.status(400).json({ success: false, message: 'Free plan does not require payment.' });
       }
 
-      // Kiểm tra subscription hiện tại - chặn downgrade
-      const currentSub = await Subscription.findOne({
-        restaurantId: targetId,
-        status: 'active',
-        expiredAt: { $gt: new Date() },
-      });
-
+      const now = new Date();
+      const currentSub = await getCurrentActiveSubscription(targetId, now);
       if (currentSub) {
-        const planOrder = { free: 0, plus: 1, pro: 2 };
-        if (planOrder[plan] <= planOrder[currentSub.plan]) {
+        const currentPlan = getPlanCode(currentSub.planCode || currentSub.plan);
+        if (plan === currentPlan) {
+          amount = planInfo.price;
+          description = `Gia han goi ${planInfo.name}`;
+          metadata = { plan, planCode: plan, isRenewal: true };
+        } else if ((PLAN_ORDER[plan] ?? 0) < (PLAN_ORDER[currentPlan] ?? 0)) {
           return res.status(400).json({
             success: false,
-            message: `Không thể chọn gói ${plan}. Bạn đang sử dụng gói ${currentSub.plan}.`,
+            message: `Cannot downgrade from ${currentPlan} to ${plan} while the current plan is active.`,
           });
+        } else {
+          const currentEnd = currentSub.currentPeriodEnd || currentSub.expiredAt || now;
+          const remainingDays = Math.max(0, Math.ceil((currentEnd - now) / (1000 * 60 * 60 * 24)));
+          const currentPlanInfo = getPlanInfo(currentPlan) || SUBSCRIPTION_PLANS.free;
+          const dailyRate = currentPlanInfo.durationDays ? currentPlanInfo.price / currentPlanInfo.durationDays : 0;
+          const creditAmount = Math.floor(dailyRate * remainingDays);
+          amount = Math.max(planInfo.price - creditAmount, MIN_PAYMENT_AMOUNT);
+          description = `Nang cap goi ${currentPlan} -> ${plan}`;
+          metadata = {
+            fromPlan: currentPlan,
+            toPlan: plan,
+            planCode: plan,
+            creditAmount,
+            remainingDays,
+          };
         }
-
-        // Tính tiền nâng cấp (pro-rata)
-        const remainingDays = Math.max(0, Math.ceil((currentSub.expiredAt - new Date()) / (1000 * 60 * 60 * 24)));
-        const currentPlanInfo = SUBSCRIPTION_PLANS[currentSub.plan];
-        const dailyRate = currentPlanInfo.price / currentPlanInfo.durationDays;
-        const creditAmount = Math.floor(dailyRate * remainingDays);
-        amount = Math.max(planInfo.price - creditAmount, 1000); // Tối thiểu 1000 VNĐ
-        description = `Nâng cấp gói ${currentSub.plan} → ${plan} (khấu trừ ${creditAmount.toLocaleString()}₫)`;
-        metadata = { fromPlan: currentSub.plan, toPlan: plan, creditAmount, remainingDays };
       } else {
         amount = planInfo.price;
-        description = `Mua gói ${planInfo.name} - 30 ngày`;
-        metadata = { plan };
+        description = `Mua goi ${planInfo.name}`;
+        metadata = { plan, planCode: plan };
       }
 
       restaurantId = restaurant._id;
-
     } else {
-      return res.status(400).json({ success: false, message: 'targetType phải là booking hoặc subscription.' });
-    }
-
-    // ─── Kiểm tra payment pending đã tồn tại ───
-    const existingPending = await Payment.findOne({
-      userId,
-      targetType,
-      targetId,
-      status: 'pending',
-    });
-
-    if (existingPending && existingPending.checkoutUrl) {
-      // Trả lại payment cũ nếu vẫn còn hợp lệ
-      return res.status(200).json({
-        success: true,
-        message: 'Sử dụng link thanh toán đã tạo trước đó.',
-        data: existingPending,
+      return res.status(400).json({
+        success: false,
+        message: 'This payment targetType is not supported yet.',
       });
     }
 
-    // Hủy payment pending cũ nếu không có link
-    if (existingPending) {
-      existingPending.status = 'cancelled';
-      existingPending.cancelledAt = new Date();
-      await existingPending.save();
+    const reusablePending = await findReusablePendingPayment({
+      userId,
+      targetType,
+      targetId,
+      metadata,
+    });
+
+    if (reusablePending) {
+      return res.status(200).json({
+        success: true,
+        message: 'Using existing pending payment link.',
+        data: reusablePending,
+      });
     }
 
-    // ─── Tạo orderCode và Payment record ───
     const orderCode = await generateOrderCode();
-
     const payment = await Payment.create({
       userId,
       targetType,
@@ -193,45 +257,45 @@ exports.createPayment = async (req, res) => {
       status: 'pending',
     });
 
-    // ─── Gọi PayOS tạo link thanh toán ───
     try {
       const payosResponse = await payosService.createPaymentLink(
         orderCode,
         amount,
-        description.substring(0, 25), // PayOS giới hạn 25 ký tự description
+        description.substring(0, 25),
+        undefined,
+        undefined,
+        targetType,
       );
 
-      if (payosResponse && payosResponse.data) {
+      if (payosResponse?.data) {
         payment.checkoutUrl = payosResponse.data.checkoutUrl;
         payment.paymentLinkId = payosResponse.data.paymentLinkId;
         payment.qrCode = payosResponse.data.qrCode || null;
-        payment.expiredAt = new Date(Date.now() + 30 * 60 * 1000); // 30 phút
+        payment.expiredAt = new Date(Date.now() + payosConfig.expirationMinutes * 60 * 1000);
         await payment.save();
       }
     } catch (payosError) {
-      console.error('❌ Lỗi tạo PayOS link:', payosError.message);
+      console.error('Create PayOS payment link error:', payosError.message);
       payment.status = 'failed';
       await payment.save();
       return res.status(500).json({
         success: false,
-        message: 'Không thể tạo link thanh toán PayOS. Vui lòng thử lại.',
+        message: 'Cannot create PayOS payment link. Please try again.',
         error: payosError.message,
       });
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Tạo link thanh toán thành công.',
+      message: 'Payment link created.',
       data: payment,
     });
-
   } catch (error) {
-    console.error('❌ createPayment error:', error);
+    console.error('createPayment error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── GET /api/v1/payments/my ───
 exports.getMyPayments = async (req, res) => {
   try {
     const { page = 1, limit = 10, status, targetType } = req.query;
@@ -241,8 +305,8 @@ exports.getMyPayments = async (req, res) => {
 
     const payments = await Payment.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
+      .skip((Number(page) - 1) * Number(limit))
+      .limit(Number(limit))
       .populate('restaurantId', 'name');
 
     const total = await Payment.countDocuments(filter);
@@ -250,14 +314,18 @@ exports.getMyPayments = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: payments,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, totalPages: Math.ceil(total / limit) },
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        totalPages: Math.ceil(total / Number(limit)),
+      },
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── GET /api/v1/payments/:id ───
 exports.getPaymentById = async (req, res) => {
   try {
     const payment = await Payment.findById(req.params.id)
@@ -265,12 +333,11 @@ exports.getPaymentById = async (req, res) => {
       .populate('restaurantId', 'name');
 
     if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment không tồn tại.' });
+      return res.status(404).json({ success: false, message: 'Payment not found.' });
     }
 
-    // Kiểm tra quyền: chỉ user tạo hoặc admin mới được xem
-    if (payment.userId._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Không có quyền xem payment này.' });
+    if (String(payment.userId._id) !== String(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You cannot view this payment.' });
     }
 
     return res.status(200).json({ success: true, data: payment });
@@ -279,162 +346,232 @@ exports.getPaymentById = async (req, res) => {
   }
 };
 
-// ─── GET /api/v1/payments/check-status/:orderCode ───
 exports.checkPaymentStatus = async (req, res) => {
   try {
     const { orderCode } = req.params;
-    const payment = await Payment.findOne({ orderCode: parseInt(orderCode) });
+    await expirePendingPayments({ orderCode });
+    const payment = await Payment.findOne({ orderCode: Number(orderCode) });
 
     if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment không tồn tại.' });
+      return res.status(404).json({ success: false, message: 'Payment not found.' });
+    }
+    if (String(payment.userId) !== String(req.user._id) && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You cannot view this payment.' });
     }
 
-    // Nếu đã paid thì trả về luôn
+    const responseData = payment.toObject();
+
     if (payment.status === 'paid') {
-      return res.status(200).json({ success: true, data: payment });
+      let entitlementMissing = false;
+      if (payment.targetType === 'subscription') {
+        const existingSubscription = await Subscription.findOne({ paymentId: payment._id });
+        if (!existingSubscription) entitlementMissing = true;
+      } else if (payment.targetType === 'featured_restaurant') {
+        const existingPlacement = await FeaturedPlacement.findOne({ paymentId: payment._id, status: 'active' });
+        if (!existingPlacement) entitlementMissing = true;
+      } else if (payment.targetType === 'voucher_campaign') {
+        const existingCampaign = await VoucherCampaignPurchase.findOne({ paymentId: payment._id, status: 'active' });
+        if (!existingCampaign) entitlementMissing = true;
+      }
+
+      if (entitlementMissing) {
+        console.log(`[Repair/checkStatus] Reconciling paid payment ${payment._id} (${payment.targetType}) with missing entitlement.`);
+        await activatePaidPaymentEntitlement(payment, req.app?.get?.('io') || null);
+      }
+      return res.status(200).json({ success: true, data: responseData });
+    }
+    if (['failed', 'cancelled', 'expired', 'refunded', 'partially_refunded'].includes(payment.status)) {
+      return res.status(200).json({ success: true, data: responseData });
     }
 
-    // Gọi PayOS kiểm tra trạng thái mới nhất
     try {
-      const payosInfo = await payosService.getPaymentInfo(parseInt(orderCode));
+      const payosInfo = await payosService.getPaymentInfo(Number(orderCode));
+      const gatewayStatus = payosInfo?.data?.status || null;
+      responseData.gatewayStatus = gatewayStatus;
 
-      if (payosInfo?.data?.status === 'PAID' && payment.status === 'pending') {
-        payment.status = 'paid';
-        payment.paidAt = new Date();
-        await payment.save();
+      if (gatewayStatus === 'PAID' && payment.status === 'pending') {
+        const claimedPayment = await Payment.findOneAndUpdate(
+          {
+            _id: payment._id,
+            status: 'pending',
+          },
+          {
+            $set: {
+              status: 'paid',
+              paidAt: new Date(),
+            },
+          },
+          { new: true }
+        );
 
-        // Cập nhật entity liên quan
-        await _processPaymentSuccess(payment, req.app?.get?.('io') || null);
+        if (claimedPayment) {
+          await _processPaymentSuccess(claimedPayment, req.app?.get?.('io') || null);
 
-        // Tạo transaction
-        await Transaction.create({
-          paymentId: payment._id,
-          type: 'payment',
-          amount: payment.amount,
-          status: 'success',
-          gateway: 'payos',
-          gatewayTransactionId: payosInfo.data?.id || null,
-        });
-      } else if (payosInfo?.data?.status === 'CANCELLED') {
-        payment.status = 'cancelled';
+          await Transaction.findOneAndUpdate(
+            { idempotencyKey: `payment:${claimedPayment._id}` },
+            {
+              $setOnInsert: {
+                paymentId: claimedPayment._id,
+                idempotencyKey: `payment:${claimedPayment._id}`,
+                type: 'payment',
+                amount: claimedPayment.amount,
+                status: 'success',
+                gateway: 'payos',
+                gatewayTransactionId: payosInfo?.data?.reference || payosInfo?.data?.paymentLinkId || null,
+                rawPayload: payosInfo?.data || {},
+              },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+
+          payment.status = 'paid';
+          payment.paidAt = claimedPayment.paidAt;
+          responseData.status = 'paid';
+          responseData.paidAt = claimedPayment.paidAt;
+        }
+      } else if (['CANCELLED', 'EXPIRED'].includes(gatewayStatus) && payment.status === 'pending') {
+        payment.status = gatewayStatus === 'EXPIRED' ? 'expired' : 'cancelled';
         payment.cancelledAt = new Date();
+        if (gatewayStatus === 'EXPIRED') {
+          payment.expiredAt = payment.expiredAt || payment.cancelledAt;
+        }
         await payment.save();
+        await featuredPlacementService.cancelFeaturedPlacementForPayment(payment, payment.cancelledAt);
+        await voucherCampaignService.cancelVoucherCampaignForPayment(payment, payment.cancelledAt);
+        responseData.status = payment.status;
+        responseData.cancelledAt = payment.cancelledAt;
         notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
           payment,
           status: 'failed',
         }).catch((error) => console.warn(`[PaymentNotification/cancelled] ${error.message}`));
       }
     } catch (payosError) {
-      console.error('❌ Lỗi check PayOS status:', payosError.message);
+      console.error('Check PayOS status error:', payosError.message);
     }
 
-    return res.status(200).json({ success: true, data: payment });
+    return res.status(200).json({ success: true, data: responseData });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── POST /api/v1/payments/:id/cancel ───
 exports.cancelPayment = async (req, res) => {
   try {
     const payment = await Payment.findById(req.params.id);
     if (!payment) {
-      return res.status(404).json({ success: false, message: 'Payment không tồn tại.' });
+      return res.status(404).json({ success: false, message: 'Payment not found.' });
     }
-    if (payment.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ success: false, message: 'Không có quyền hủy payment này.' });
+    if (String(payment.userId) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'You cannot cancel this payment.' });
     }
     if (payment.status !== 'pending') {
-      return res.status(400).json({ success: false, message: 'Chỉ có thể hủy payment đang pending.' });
+      return res.status(400).json({ success: false, message: 'Only pending payments can be cancelled.' });
     }
 
     try {
       await payosService.cancelPaymentLink(payment.orderCode);
-    } catch (e) {
-      console.error('PayOS cancel error:', e.message);
+    } catch (error) {
+      console.error('PayOS cancel error:', error.message);
     }
 
     payment.status = 'cancelled';
     payment.cancelledAt = new Date();
     await payment.save();
+    await featuredPlacementService.cancelFeaturedPlacementForPayment(payment, payment.cancelledAt);
+    await voucherCampaignService.cancelVoucherCampaignForPayment(payment, payment.cancelledAt);
+
     notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
       payment,
       status: 'failed',
     }).catch((error) => console.warn(`[PaymentNotification/user_cancelled] ${error.message}`));
 
-    return res.status(200).json({ success: true, message: 'Đã hủy thanh toán.', data: payment });
+    return res.status(200).json({ success: true, message: 'Payment cancelled.', data: payment });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── Xử lý khi thanh toán thành công ───
 async function _processPaymentSuccess(payment, io = null) {
   if (payment.targetType === 'booking') {
     const booking = await Booking.findById(payment.targetId).populate('voucherId');
-    if (booking) {
-      booking.depositPaid = true;
-      booking.depositPaidAt = new Date();
-      booking.paymentId = payment._id;
-      booking.status = 'confirmed';
-      booking.statusHistory.push({
-        status: 'confirmed',
-        changedAt: new Date(),
-        note: 'Đã thanh toán đặt cọc qua PayOS',
-      });
-      await booking.save();
+    if (!booking) return;
+    if (booking.depositPaid && String(booking.paymentId || '') === String(payment._id)) return;
 
-      // Redeem voucher khi thanh toán thành công
-      if (booking.voucherId) {
-        try {
-          const voucherService = require('../services/voucher.service');
-          await voucherService.redeemVoucher(
-            booking.voucherId.code,
-            booking.restaurantId,
-            booking.customerId,
-            booking.depositAmount, // Số tiền gốc trước giảm
-            booking._id,
-            payment._id
-          );
-          console.log(`✅ Voucher ${booking.voucherId.code} redeemed successfully for booking ${booking._id}`);
-        } catch (voucherErr) {
-          console.error(`❌ Lỗi redeem voucher khi thanh toán: ${voucherErr.message}`);
-        }
+    booking.depositPaid = true;
+    booking.depositPaidAt = booking.depositPaidAt || new Date();
+    booking.paymentId = payment._id;
+    booking.status = 'confirmed';
+    booking.statusHistory.push({
+      status: 'confirmed',
+      changedAt: new Date(),
+      note: 'Deposit paid via PayOS',
+    });
+    await booking.save();
+
+    if (booking.voucherId) {
+      try {
+        await voucherService.redeemVoucher(
+          booking.voucherId.code,
+          booking.restaurantId,
+          booking.customerId,
+          booking.depositAmount,
+          booking._id,
+          payment._id
+        );
+      } catch (error) {
+        console.error(`Voucher redeem after payment error: ${error.message}`);
       }
     }
-    console.log(`✅ Booking ${payment.targetId} → confirmed (deposit paid)`);
 
-    if (booking) {
-      const restaurant = await Restaurant.findById(booking.restaurantId).select('_id ownerId name');
-      notificationService.notifyPaymentStatus(io, {
-        payment,
-        booking,
-        restaurant,
-        status: 'success',
-      }).catch((error) => console.warn(`[PaymentNotification/success] ${error.message}`));
-    }
-  } else if (payment.targetType === 'subscription') {
-    const plan = payment.metadata?.toPlan || payment.metadata?.plan;
-    const planInfo = SUBSCRIPTION_PLANS[plan];
+    const restaurant = await Restaurant.findById(booking.restaurantId).select('_id ownerId name');
+    notificationService.notifyPaymentStatus(io, {
+      payment,
+      booking,
+      restaurant,
+      status: 'success',
+    }).catch((error) => console.warn(`[PaymentNotification/success] ${error.message}`));
+    return;
+  }
+
+  if (payment.targetType === 'subscription') {
+    const existingSubscription = await Subscription.findOne({ paymentId: payment._id });
+    if (existingSubscription) return;
+
+    const plan = getPaymentPlanCode(payment);
+    const planInfo = getPlanInfo(plan);
     if (!planInfo) return;
 
     const now = new Date();
-    const expiredAt = new Date(now.getTime() + planInfo.durationDays * 24 * 60 * 60 * 1000);
+    const currentActiveSub = await getCurrentActiveSubscription(payment.targetId, now);
+    const currentPlan = getPlanCode(currentActiveSub?.planCode || currentActiveSub?.plan);
 
-    // Hết hạn subscription cũ nếu có
-    await Subscription.updateMany(
-      { restaurantId: payment.targetId, status: 'active' },
-      { status: 'expired' }
-    );
+    let currentPeriodStart = now;
+    let currentPeriodEnd = new Date(now.getTime() + planInfo.durationDays * 24 * 60 * 60 * 1000);
 
-    // Tạo subscription mới
+    if (currentActiveSub && plan === currentPlan) {
+      const baseDate = currentActiveSub.currentPeriodEnd || currentActiveSub.expiredAt || now;
+      currentPeriodStart = baseDate > now ? baseDate : now;
+      currentPeriodEnd = new Date(currentPeriodStart.getTime() + planInfo.durationDays * 24 * 60 * 60 * 1000);
+      currentActiveSub.status = 'expired';
+      await currentActiveSub.save();
+    } else {
+      await Subscription.updateMany(
+        { restaurantId: payment.targetId, status: 'active' },
+        { status: 'expired' }
+      );
+    }
+
     await Subscription.create({
       ownerId: payment.userId,
       restaurantId: payment.targetId,
       plan,
+      planCode: plan,
       status: 'active',
-      startedAt: now,
-      expiredAt,
+      autoRenew: false,
+      startedAt: currentPeriodStart,
+      expiredAt: currentPeriodEnd,
+      currentPeriodStart,
+      currentPeriodEnd,
       paymentId: payment._id,
       benefitsSnapshot: planInfo.benefits,
     });
@@ -445,10 +582,37 @@ async function _processPaymentSuccess(payment, io = null) {
       restaurant,
       status: 'success',
     }).catch((error) => console.warn(`[PaymentNotification/subscription] ${error.message}`));
+    return;
+  }
 
-    console.log(`✅ Subscription ${plan} activated for restaurant ${payment.targetId}, expires ${expiredAt}`);
+  if (payment.targetType === 'featured_restaurant') {
+    const placement = await featuredPlacementService.activateFeaturedPlacementFromPayment(payment);
+    const restaurant = await Restaurant.findById(payment.restaurantId || payment.targetId).select('_id ownerId name');
+    notificationService.notifyPaymentStatus(io, {
+      payment,
+      restaurant,
+      status: placement ? 'success' : 'failed',
+    }).catch((error) => console.warn(`[PaymentNotification/featured] ${error.message}`));
+    return;
+  }
+
+  if (payment.targetType === 'voucher_campaign') {
+    const campaign = await voucherCampaignService.activateVoucherCampaignFromPayment(payment);
+    const restaurant = await Restaurant.findById(payment.restaurantId || payment.metadata?.restaurantId)
+      .select('_id ownerId name');
+    notificationService.notifyPaymentStatus(io, {
+      payment,
+      restaurant,
+      status: campaign ? 'success' : 'failed',
+    }).catch((error) => console.warn(`[PaymentNotification/voucher_campaign] ${error.message}`));
   }
 }
 
-// Export helper cho webhook
+async function activatePaidPaymentEntitlement(payment, io = null) {
+  if (!payment) return null;
+  if (payment.status !== 'paid') return null;
+  return _processPaymentSuccess(payment, io);
+}
+
 exports._processPaymentSuccess = _processPaymentSuccess;
+exports.activatePaidPaymentEntitlement = activatePaidPaymentEntitlement;

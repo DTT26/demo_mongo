@@ -8,6 +8,7 @@ const { protect, restrictTo } = require('../middleware/auth.middleware');
 // ─── Public Routes ───
 // Lấy danh sách voucher khả dụng trên trang chi tiết nhà hàng (khách vãng lai có thể xem)
 router.get('/restaurant/:restaurantId', voucherCtrl.getRestaurantVouchers);
+router.get('/campaigns/homepage', voucherCtrl.getHomepageVoucherCampaigns);
 
 // ─── Customer Routes (Yêu cầu đăng nhập + role customer) ───
 router.post('/validate', protect, restrictTo('customer'), voucherCtrl.validateVoucherForBooking);

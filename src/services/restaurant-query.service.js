@@ -3,6 +3,8 @@
 const mongoose = require('mongoose');
 const Restaurant = require('../models/Restaurant');
 const { normalizeRestaurantImages } = require('../utils/restaurant-images');
+const featuredPlacementService = require('./featured-placement.service');
+const voucherCampaignService = require('./voucher-campaign.service');
 
 const PUBLIC_RESTAURANT_FILTER = Object.freeze({
   approvalStatus: 'approved',
@@ -144,6 +146,9 @@ const normalizeRestaurantQuery = (query = {}) => ({
   priceRange: String(query.priceRange || '').trim(),
   city: String(query.city || '').trim(),
   featured: query.featured,
+  boostPlacement: ['search_boost', 'ai_suggestion'].includes(query.boostPlacement)
+    ? query.boostPlacement
+    : 'search_boost',
   sortBy: String(query.sortBy || 'name').trim(),
   sortDir: query.sortDir === 'desc' ? 'desc' : 'asc',
 });
@@ -165,10 +170,6 @@ const buildPublicRestaurantFilter = (query = {}) => {
         { 'address.fullAddress': cityRegex },
       ],
     });
-  }
-
-  if (normalized.featured !== undefined) {
-    filter.featured = normalized.featured === true || normalized.featured === 'true';
   }
 
   if (normalized.priceRange === 'low') {
@@ -202,8 +203,51 @@ const getSortObject = (query = {}) => {
   return { [sortField]: sortDir };
 };
 
-const formatPublicRestaurantSummary = (restaurant) => {
+const isFeaturedRequested = (value) => value !== undefined && value !== null && value !== '';
+
+const getFeaturedFilterValue = (value) => value === true || value === 'true';
+
+const formatFeaturedFields = (featuredPlacement) => {
+  const isFeatured = Boolean(featuredPlacement);
+  return {
+    featured: isFeatured,
+    isFeatured,
+    featuredUntil: featuredPlacement?.endAt || null,
+    featuredPriorityWeight: featuredPlacement?.priorityWeight || 0,
+    sponsoredLabel: isFeatured ? 'Noi bat' : null,
+  };
+};
+
+const formatVoucherCampaignFields = (campaign) => {
+  if (!campaign) {
+    return {
+      hasVoucherCampaign: false,
+      voucherCampaign: null,
+      voucherCampaignPlacement: null,
+      voucherCampaignPriorityWeight: 0,
+    };
+  }
+  return {
+    hasVoucherCampaign: true,
+    voucherCampaignPlacement: campaign.placement,
+    voucherCampaignPriorityWeight: campaign.priorityWeight || 0,
+    voucherCampaign: {
+      campaignId: campaign._id,
+      placement: campaign.placement,
+      packageCode: campaign.packageCode,
+      endAt: campaign.endAt,
+      sponsoredLabel: 'Duoc tai tro',
+      voucher: campaign.voucherId
+        ? voucherCampaignService.serializeVoucher(campaign.voucherId)
+        : null,
+    },
+  };
+};
+
+const formatPublicRestaurantSummary = (restaurant, featuredPlacement = null, voucherCampaign = null) => {
   const imageData = normalizeRestaurantImages(restaurant);
+  const featuredFields = formatFeaturedFields(featuredPlacement);
+  const voucherCampaignFields = formatVoucherCampaignFields(voucherCampaign);
   return {
   id: restaurant._id.toString(),
   name: restaurant.name,
@@ -225,13 +269,20 @@ const formatPublicRestaurantSummary = (restaurant) => {
   averageRating: restaurant.stats?.averageRating || 0,
   reviewCount: restaurant.stats?.totalReviews || 0,
   stats: restaurant.stats,
-  featured: restaurant.featured,
+  ...featuredFields,
+  ...voucherCampaignFields,
   createdAt: restaurant.createdAt,
   };
 };
 
-const formatPublicRestaurantDetail = (restaurant) => {
+const formatPublicRestaurantDetail = (restaurant, featuredPlacement = null, voucherCampaigns = []) => {
   const imageData = normalizeRestaurantImages(restaurant);
+  const featuredFields = formatFeaturedFields(featuredPlacement);
+  const primaryVoucherCampaign = voucherCampaigns[0] || null;
+  const voucherCampaignFields = formatVoucherCampaignFields(primaryVoucherCampaign && {
+    ...primaryVoucherCampaign,
+    voucherId: primaryVoucherCampaign.voucher,
+  });
   return {
   id: restaurant._id.toString(),
   name: restaurant.name,
@@ -267,7 +318,9 @@ const formatPublicRestaurantDetail = (restaurant) => {
   stats: restaurant.stats,
   averageRating: restaurant.stats?.averageRating || 0,
   reviewCount: restaurant.stats?.totalReviews || 0,
-  featured: restaurant.featured,
+  ...featuredFields,
+  ...voucherCampaignFields,
+  voucherCampaigns,
   createdAt: restaurant.createdAt,
   };
 };
@@ -278,17 +331,68 @@ const searchPublicRestaurants = async (query = {}) => {
   const filter = buildPublicRestaurantFilter(normalized);
   const sort = getSortObject(normalized);
 
-  const [restaurants, total] = await Promise.all([
-    Restaurant.find(filter)
-      .sort(sort)
-      .skip(skip)
-      .limit(normalized.limit)
-      .lean(),
-    Restaurant.countDocuments(filter),
-  ]);
+  const restaurants = await Restaurant.find(filter)
+    .sort(sort)
+    .lean();
+
+  const activePlacementMap = await featuredPlacementService.getActivePlacementMap(
+    restaurants.map((restaurant) => restaurant._id)
+  );
+  const voucherCampaignMap = await voucherCampaignService.getActiveCampaignMapByRestaurant(
+    restaurants.map((restaurant) => restaurant._id),
+    normalized.boostPlacement
+  );
+
+  const featuredFilterRequested = isFeaturedRequested(normalized.featured);
+  const featuredFilterValue = getFeaturedFilterValue(normalized.featured);
+
+  const sortedRestaurants = restaurants
+    .map((restaurant, index) => ({
+      restaurant,
+      index,
+      featuredPlacement: activePlacementMap.get(String(restaurant._id)) || null,
+      voucherCampaign: voucherCampaignMap.get(String(restaurant._id)) || null,
+    }))
+    .filter((item) => {
+      if (!featuredFilterRequested) return true;
+      return Boolean(item.featuredPlacement) === featuredFilterValue;
+    })
+    .sort((a, b) => {
+      const aFeatured = Boolean(a.featuredPlacement);
+      const bFeatured = Boolean(b.featuredPlacement);
+      if (aFeatured !== bFeatured) return aFeatured ? -1 : 1;
+
+      if (aFeatured && bFeatured) {
+        const priorityDiff = (b.featuredPlacement.priorityWeight || 0) - (a.featuredPlacement.priorityWeight || 0);
+        if (priorityDiff !== 0) return priorityDiff;
+        const aEnd = a.featuredPlacement.endAt ? new Date(a.featuredPlacement.endAt).getTime() : 0;
+        const bEnd = b.featuredPlacement.endAt ? new Date(b.featuredPlacement.endAt).getTime() : 0;
+        if (bEnd !== aEnd) return bEnd - aEnd;
+      }
+
+      const aVoucherBoost = Boolean(a.voucherCampaign);
+      const bVoucherBoost = Boolean(b.voucherCampaign);
+      if (aVoucherBoost !== bVoucherBoost) return aVoucherBoost ? -1 : 1;
+      if (aVoucherBoost && bVoucherBoost) {
+        const priorityDiff = (b.voucherCampaign.priorityWeight || 0) - (a.voucherCampaign.priorityWeight || 0);
+        if (priorityDiff !== 0) return priorityDiff;
+        const aEnd = a.voucherCampaign.endAt ? new Date(a.voucherCampaign.endAt).getTime() : 0;
+        const bEnd = b.voucherCampaign.endAt ? new Date(b.voucherCampaign.endAt).getTime() : 0;
+        if (bEnd !== aEnd) return bEnd - aEnd;
+      }
+
+      return a.index - b.index;
+    });
+
+  const total = sortedRestaurants.length;
+  const pagedRestaurants = sortedRestaurants.slice(skip, skip + normalized.limit);
 
   return {
-    restaurants: restaurants.map(formatPublicRestaurantSummary),
+    restaurants: pagedRestaurants.map((item) => formatPublicRestaurantSummary(
+      item.restaurant,
+      item.featuredPlacement,
+      item.voucherCampaign
+    )),
     total,
     page: normalized.page,
     totalPages: Math.ceil(total / normalized.limit),
@@ -303,7 +407,13 @@ const getPublicRestaurantDetail = async (restaurantId) => {
     ...PUBLIC_RESTAURANT_FILTER,
   }).lean();
 
-  return restaurant ? formatPublicRestaurantDetail(restaurant) : null;
+  if (!restaurant) return null;
+
+  const [featuredPlacement, voucherCampaigns] = await Promise.all([
+    featuredPlacementService.getActivePlacementForRestaurant(restaurant._id),
+    voucherCampaignService.getRestaurantCampaignSummary(restaurant._id),
+  ]);
+  return formatPublicRestaurantDetail(restaurant, featuredPlacement, voucherCampaigns);
 };
 
 const getPublicRestaurantPolicyRules = async (restaurantId) => {

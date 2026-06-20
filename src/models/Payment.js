@@ -13,7 +13,14 @@ const paymentSchema = new mongoose.Schema(
     // ─── Loại thanh toán ───
     targetType: {
       type: String,
-      enum: ['subscription', 'booking'],
+      enum: [
+        'subscription',
+        'booking',
+        'featured_restaurant',
+        'voucher_campaign',
+        'booking_fee',
+        'deposit_platform_fee',
+      ],
       required: [true, 'Loại thanh toán là bắt buộc'],
       index: true,
     },

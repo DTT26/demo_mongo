@@ -1,6 +1,3 @@
-// ─────────────────────────────────────────────
-// PayOS Service — Tích hợp cổng thanh toán PayOS
-// ─────────────────────────────────────────────
 const axios = require('axios');
 const crypto = require('crypto');
 const { payosConfig } = require('../config/payos.config');
@@ -14,7 +11,6 @@ class PayOSService {
     });
   }
 
-  // ─── Headers xác thực ───
   _getHeaders() {
     return {
       'x-client-id': payosConfig.clientId,
@@ -22,7 +18,6 @@ class PayOSService {
     };
   }
 
-  // ─── Tạo chữ ký HMAC SHA256 cho request tạo link ───
   _signCreate(amount, cancelUrl, description, orderCode, returnUrl) {
     const data = `amount=${amount}&cancelUrl=${cancelUrl}&description=${description}&orderCode=${orderCode}&returnUrl=${returnUrl}`;
     return crypto
@@ -31,10 +26,21 @@ class PayOSService {
       .digest('hex');
   }
 
-  // ─── Tạo link thanh toán PayOS ───
-  async createPaymentLink(orderCode, amount, description, returnUrl, cancelUrl) {
-    const returnUrlFinal = returnUrl || payosConfig.returnUrl;
-    const cancelUrlFinal = cancelUrl || payosConfig.cancelUrl;
+  _appendTargetType(url, targetType) {
+    if (!targetType) return url;
+    try {
+      const parsed = new URL(url);
+      parsed.searchParams.set('targetType', targetType);
+      return parsed.toString();
+    } catch {
+      const separator = String(url).includes('?') ? '&' : '?';
+      return `${url}${separator}targetType=${encodeURIComponent(targetType)}`;
+    }
+  }
+
+  async createPaymentLink(orderCode, amount, description, returnUrl, cancelUrl, targetType) {
+    const returnUrlFinal = this._appendTargetType(returnUrl || payosConfig.returnUrl, targetType);
+    const cancelUrlFinal = this._appendTargetType(cancelUrl || payosConfig.cancelUrl, targetType);
     const expiredAt = Math.floor(Date.now() / 1000) + payosConfig.expirationMinutes * 60;
 
     const signature = this._signCreate(amount, cancelUrlFinal, description, orderCode, returnUrlFinal);
@@ -49,17 +55,16 @@ class PayOSService {
       signature,
     };
 
-    console.log(`🔗 Tạo PayOS link: orderCode=${orderCode}, amount=${amount}`);
+    console.log(`PayOS create link requested: orderCode=${orderCode}, amount=${amount}`);
 
     const response = await this.client.post('/v2/payment-requests', payload, {
       headers: this._getHeaders(),
     });
 
-    console.log(`✅ PayOS link tạo thành công: ${response.data?.data?.checkoutUrl}`);
+    console.log(`PayOS create link succeeded: orderCode=${orderCode}, hasCheckoutUrl=${Boolean(response.data?.data?.checkoutUrl)}`);
     return response.data;
   }
 
-  // ─── Lấy thông tin thanh toán từ PayOS ───
   async getPaymentInfo(orderCode) {
     const response = await this.client.get(`/v2/payment-requests/${orderCode}`, {
       headers: this._getHeaders(),
@@ -67,31 +72,32 @@ class PayOSService {
     return response.data;
   }
 
-  // ─── Xác thực chữ ký webhook ───
   verifyWebhookSignature(rawBody, signature) {
     try {
       const expectedSignature = crypto
         .createHmac('sha256', payosConfig.checksumKey)
         .update(rawBody)
         .digest('hex');
-      return expectedSignature === signature;
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const signatureBuffer = Buffer.from(String(signature || ''), 'utf8');
+      return expectedBuffer.length === signatureBuffer.length
+        && crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
     } catch (error) {
-      console.error('❌ Lỗi verify webhook signature:', error);
+      console.error('PayOS webhook signature verification error:', error.message);
       return false;
     }
   }
 
-  // ─── Hủy link thanh toán PayOS ───
   async cancelPaymentLink(orderCode, cancellationReason) {
     try {
       const response = await this.client.post(
         `/v2/payment-requests/${orderCode}/cancel`,
-        { cancellationReason: cancellationReason || 'Người dùng hủy thanh toán' },
+        { cancellationReason: cancellationReason || 'User cancelled payment' },
         { headers: this._getHeaders() }
       );
       return response.data;
     } catch (error) {
-      console.error(`❌ Lỗi hủy PayOS link: ${error.message}`);
+      console.error(`PayOS cancel link error: ${error.message}`);
       throw error;
     }
   }

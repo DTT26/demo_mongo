@@ -6,6 +6,7 @@ const RestaurantTable = require('../models/RestaurantTable');
 const bookingService = require('../services/booking.service');
 const emailService = require('../services/email.service');
 const notificationService = require('../services/notification.service');
+const bookingCommissionService = require('../services/booking-commission.service');
 
 const emitBookingEvent = (io, room, event, payload) => {
   if (!io) return;
@@ -218,6 +219,12 @@ const cancelBooking = async (req, res) => {
 
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');
+    bookingCommissionService.markCancelledForBooking(
+      booking._id,
+      `Nhà hàng huỷ booking trước khi phí trở thành khoản phải thu: ${reason}`
+    ).catch((error) => {
+      console.warn(`[BookingCommission/cancelled] ${error.message}`);
+    });
     emitBookingEvent(io, `user:${booking.customerId.toString()}`, 'booking:cancelled', {
       bookingId: booking._id,
       restaurantId: booking.restaurantId,
@@ -291,6 +298,11 @@ const completeBooking = async (req, res) => {
 
     // Cập nhật statistics cho nhà hàng
     const restaurant = req.restaurant;
+    await bookingCommissionService.createLedgerForBooking(booking._id, {
+      booking,
+      restaurant,
+      source: booking.sourceAiPendingActionId ? 'ai_booking_completed' : 'owner_booking_completed',
+    });
     restaurant.stats.completedBookings += 1;
     await restaurant.save();
 

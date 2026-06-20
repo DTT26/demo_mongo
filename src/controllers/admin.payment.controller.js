@@ -5,6 +5,7 @@ const Payment = require('../models/Payment');
 const Transaction = require('../models/Transaction');
 const WebhookLog = require('../models/WebhookLog');
 const Subscription = require('../models/Subscription');
+const BookingCommissionLedger = require('../models/BookingCommissionLedger');
 
 // ─── GET /api/v1/admin/payments ───
 exports.getAllPayments = async (req, res) => {
@@ -127,21 +128,66 @@ exports.getRevenue = async (req, res) => {
     // Tổng hợp
     const subscriptionRevenue = revenueByType.find(r => r._id === 'subscription') || { total: 0, count: 0 };
     const bookingRevenue = revenueByType.find(r => r._id === 'booking') || { total: 0, count: 0 };
+    const featuredRevenue = revenueByType.find(r => r._id === 'featured_restaurant') || { total: 0, count: 0 };
+    const voucherCampaignRevenue = revenueByType.find(r => r._id === 'voucher_campaign') || { total: 0, count: 0 };
+    const bookingFeeRevenue = revenueByType.find(r => r._id === 'booking_fee') || { total: 0, count: 0 };
+    const depositPlatformFeeRevenue = revenueByType.find(r => r._id === 'deposit_platform_fee') || { total: 0, count: 0 };
     const refund = refundTotal[0] || { total: 0, count: 0 };
 
-    const totalRevenue = subscriptionRevenue.total + bookingRevenue.total;
+    const totalRevenue = revenueByType.reduce((sum, item) => sum + item.total, 0);
     const netRevenue = totalRevenue - refund.total;
 
     // Số lượng subscription active
-    const activeSubscriptions = await Subscription.countDocuments({ status: 'active', expiredAt: { $gt: new Date() } });
+    const activeSubscriptions = await Subscription.countDocuments({
+      status: 'active',
+      $or: [
+        { currentPeriodEnd: { $gt: new Date() } },
+        { expiredAt: { $gt: new Date() } },
+      ],
+    });
+
+    const commissionDateFilter = Object.keys(matchDate).length > 0 ? { createdAt: matchDate } : {};
+    let commissionRows = [];
+    if (BookingCommissionLedger.db.readyState === 1) {
+      try {
+        commissionRows = await BookingCommissionLedger.aggregate([
+          { $match: commissionDateFilter },
+          {
+            $group: {
+              _id: '$status',
+              total: { $sum: '$commissionAmount' },
+              count: { $sum: 1 },
+            },
+          },
+        ]);
+      } catch (commissionError) {
+        // Paid PayOS revenue remains available if the projected ledger summary is unavailable.
+        console.warn(`[AdminRevenue/BookingCommission] ${commissionError.message}`);
+      }
+    }
+    const commissionByStatus = Object.fromEntries(
+      commissionRows.map((item) => [item._id, { total: item.total, count: item.count }])
+    );
+    const pendingCommission = commissionByStatus.pending || { total: 0, count: 0 };
+    const billableCommission = commissionByStatus.billable || { total: 0, count: 0 };
+    const paidCommission = commissionByStatus.paid || { total: 0, count: 0 };
 
     return res.status(200).json({
       success: true,
       data: {
         totalRevenue,
+        paidRevenue: totalRevenue,
         netRevenue,
+        projectedBookingCommission: pendingCommission.total + billableCommission.total,
+        billableBookingCommission: billableCommission.total,
+        paidBookingCommission: paidCommission.total,
+        revenueByType,
         subscriptionRevenue: { total: subscriptionRevenue.total, count: subscriptionRevenue.count },
         bookingRevenue: { total: bookingRevenue.total, count: bookingRevenue.count },
+        featuredRevenue: { total: featuredRevenue.total, count: featuredRevenue.count },
+        voucherCampaignRevenue: { total: voucherCampaignRevenue.total, count: voucherCampaignRevenue.count },
+        bookingFeeRevenue: { total: bookingFeeRevenue.total, count: bookingFeeRevenue.count },
+        depositPlatformFeeRevenue: { total: depositPlatformFeeRevenue.total, count: depositPlatformFeeRevenue.count },
         refundTotal: { total: refund.total, count: refund.count },
         activeSubscriptions,
         dailyRevenue,

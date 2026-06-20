@@ -6,6 +6,7 @@ const RestaurantTable = require('../models/RestaurantTable');
 const bookingService = require('../services/booking.service');
 const emailService = require('../services/email.service');
 const notificationService = require('../services/notification.service');
+const bookingCommissionService = require('../services/booking-commission.service');
 const {
   BookingApplicationError,
   createBookingApplicationService,
@@ -504,6 +505,12 @@ const cancelBooking = async (req, res) => {
 
     // Gửi thông báo real-time qua Socket.io
     const io = req.app.get('io');
+    bookingCommissionService.markCancelledForBooking(
+      booking._id,
+      `Khách hàng huỷ booking trước khi phí trở thành khoản phải thu: ${booking.cancellationReason}`
+    ).catch((error) => {
+      console.warn(`[BookingCommission/customer-cancelled] ${error.message}`);
+    });
     const restaurant = await Restaurant.findById(booking.restaurantId);
     emitBookingEvent(io, `restaurant:${booking.restaurantId.toString()}`, 'booking:cancelled', {
       bookingId: booking._id,

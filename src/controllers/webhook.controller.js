@@ -5,14 +5,22 @@ const Payment = require('../models/Payment');
 const Transaction = require('../models/Transaction');
 const WebhookLog = require('../models/WebhookLog');
 const payosService = require('../services/payos.service');
-const { _processPaymentSuccess } = require('./payment.controller');
+const paymentController = require('./payment.controller');
 const notificationService = require('../services/notification.service');
+const featuredPlacementService = require('../services/featured-placement.service');
+const voucherCampaignService = require('../services/voucher-campaign.service');
+
+const RETRYABLE_MONETIZATION_TARGETS = new Set([
+  'subscription',
+  'featured_restaurant',
+  'voucher_campaign',
+]);
 
 // ─── POST /api/v1/webhooks/payos ───
 exports.handlePayOSWebhook = async (req, res) => {
   try {
     const signature = req.headers['x-payos-signature'] || '';
-    const rawBody = JSON.stringify(req.body);
+    const rawBody = req.rawBody || JSON.stringify(req.body);
 
     // ─── Verify chữ ký ───
     const signatureValid = payosService.verifyWebhookSignature(rawBody, signature);
@@ -50,6 +58,10 @@ exports.handlePayOSWebhook = async (req, res) => {
 
     if (existingLog) {
       console.log(`⏩ Webhook đã xử lý trước đó: orderCode=${orderCode}`);
+      log.processed = true;
+      log.processedAt = new Date();
+      log.error = 'Duplicate webhook ignored';
+      await log.save();
       return res.status(200).json({ success: true });
     }
 
@@ -67,38 +79,67 @@ exports.handlePayOSWebhook = async (req, res) => {
     const isSuccess = webhookData.success && data.code === '00';
 
     if (isSuccess) {
-      // Chỉ cập nhật nếu đang pending
-      if (payment.status === 'pending' || payment.status === 'processing') {
-        payment.status = 'paid';
-        payment.paidAt = new Date();
-        await payment.save();
+      const claimedPayment = await Payment.findOneAndUpdate(
+        {
+          _id: payment._id,
+          status: { $in: ['pending', 'processing'] },
+        },
+        {
+          $set: {
+            status: 'paid',
+            paidAt: new Date(),
+          },
+        },
+        { new: true }
+      );
 
-        // Xử lý entity liên quan (Booking/Subscription)
-        await _processPaymentSuccess(payment, req.app?.get?.('io') || null);
+      const paymentToFulfill = claimedPayment || (
+        payment.status === 'paid' && RETRYABLE_MONETIZATION_TARGETS.has(payment.targetType)
+          ? payment
+          : null
+      );
 
-        // Tạo transaction log
-        await Transaction.create({
-          paymentId: payment._id,
-          type: 'payment',
-          amount: payment.amount,
-          status: 'success',
-          gateway: 'payos',
-          gatewayTransactionId: data.reference || data.paymentLinkId || null,
-          rawPayload: data,
-        });
+      if (paymentToFulfill) {
 
-        console.log(`✅ Webhook xử lý thành công: orderCode=${orderCode}, paymentId=${payment._id}`);
+        // Retry paid monetization payments safely if a previous fulfillment failed midway.
+        try {
+          await paymentController._processPaymentSuccess(paymentToFulfill, req.app?.get?.('io') || null);
+        } catch (error) {
+          log.error = `Payment fulfillment failed: ${error.message}`;
+          await log.save();
+          throw error;
+        }
+
+        // Transaction payment dung idempotency key rieng de khong double-create.
+        await Transaction.findOneAndUpdate(
+          { idempotencyKey: `payment:${paymentToFulfill._id}` },
+          {
+            $setOnInsert: {
+              paymentId: paymentToFulfill._id,
+              idempotencyKey: `payment:${paymentToFulfill._id}`,
+              type: 'payment',
+              amount: paymentToFulfill.amount,
+              status: 'success',
+              gateway: 'payos',
+              gatewayTransactionId: data.reference || data.paymentLinkId || null,
+              rawPayload: data,
+            },
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        console.log(`✅ Webhook xử lý thành công: orderCode=${orderCode}, paymentId=${paymentToFulfill._id}`);
 
         // Bắn socket notification
         try {
           const io = req.app.get('io');
           if (io) {
-            io.to(`user_${payment.userId}`).emit('payment_success', {
-              paymentId: payment._id,
+            io.to(`user_${paymentToFulfill.userId}`).emit('payment_success', {
+              paymentId: paymentToFulfill._id,
               orderCode,
-              targetType: payment.targetType,
-              targetId: payment.targetId,
-              amount: payment.amount,
+              targetType: paymentToFulfill.targetType,
+              targetId: paymentToFulfill.targetId,
+              amount: paymentToFulfill.amount,
             });
           }
         } catch (socketErr) {
@@ -106,11 +147,16 @@ exports.handlePayOSWebhook = async (req, res) => {
         }
       }
     } else {
-      if (payment.status === 'pending') {
-        payment.status = 'failed';
-        await payment.save();
+      const failedPayment = await Payment.findOneAndUpdate(
+        { _id: payment._id, status: { $in: ['pending', 'processing'] } },
+        { $set: { status: 'failed' } },
+        { new: true }
+      );
+      if (failedPayment) {
+        await featuredPlacementService.cancelFeaturedPlacementForPayment(failedPayment);
+        await voucherCampaignService.cancelVoucherCampaignForPayment(failedPayment);
         notificationService.notifyPaymentStatus(req.app?.get?.('io') || null, {
-          payment,
+          payment: failedPayment,
           status: 'failed',
         }).catch((error) => console.warn(`[WebhookNotification/payment_failed] ${error.message}`));
       }
