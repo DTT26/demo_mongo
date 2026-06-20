@@ -4,7 +4,7 @@ const { getAiConfig } = require('../config/ai.config');
 const aiMockService = require('../services/ai/ai-mock.service');
 const { defaultAiObservabilityService } = require('../services/ai/ai-observability.service');
 const { createAiOrchestrator } = require('../services/ai/ai-orchestrator.service');
-const { getProviderHealth, toPublicAiError } = require('../services/ai/ai-provider.service');
+const { getProviderHealth, toPublicAiError, createAiProviderManager } = require('../services/ai/ai-provider.service');
 const aiStreamService = require('../services/ai/ai-stream.service');
 
 const isMockEnabled = () => {
@@ -205,6 +205,7 @@ const createAiController = ({
   configProvider = getAiConfig,
   observability = defaultAiObservabilityService,
   streamService = aiStreamService,
+  provider = createAiProviderManager(),
 } = {}) => ({
   health(req, res) {
     let config;
@@ -552,6 +553,239 @@ const createAiController = ({
     }
 
     return undefined;
+  },
+
+  async polishText(req, res) {
+    let config;
+    try {
+      config = configProvider();
+    } catch (error) {
+      console.error(`[AI] requestId=${req.aiRequestId} code=AI_CONFIG_ERROR field=${error.field || 'unknown'}`);
+      return sendError(
+        res,
+        503,
+        'AI_DISABLED',
+        'Tính năng AI chưa được cấu hình.',
+        req.aiRequestId
+      );
+    }
+
+    const providerHealth = getProviderHealth(config);
+    if (!config.enabled || !providerHealth.configured) {
+      req.aiTelemetry = {
+        ...(req.aiTelemetry || {}),
+        mode: 'restaurant_form',
+        status: 'failed',
+        errorCode: 'AI_DISABLED',
+      };
+      return sendError(
+        res,
+        503,
+        'AI_DISABLED',
+        'Tính năng AI đang tạm tắt.',
+        req.aiRequestId
+      );
+    }
+
+    const budgetState = observability.isBudgetExceeded(config);
+    if (budgetState.exceeded) {
+      req.aiTelemetry = {
+        ...(req.aiTelemetry || {}),
+        mode: 'restaurant_form',
+        status: 'failed',
+        errorCode: 'BUDGET_LIMITED',
+      };
+      return sendError(
+        res,
+        429,
+        'BUDGET_LIMITED',
+        'Hạn mức AI hôm nay đã hết.',
+        req.aiRequestId
+      );
+    }
+
+    const { fieldKey, text, mode, context, maxLength } = req.body;
+    if (!text || typeof text !== 'string' || text.trim().length < 3) {
+      return sendError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        'Nội dung không hợp lệ hoặc quá ngắn.',
+        req.aiRequestId
+      );
+    }
+
+    const allowlist = new Set([
+      'name', 'description', 'customCuisine',
+      'address', 'directionNotes', 'addressNotes',
+      'statusLine', 'hoursNotes',
+      'highlights', 'suitableFor', 'signatureDishes', 'amenities', 'rules', 'bookingNote', 'imageCaption'
+    ]);
+    if (!fieldKey || !allowlist.has(fieldKey)) {
+      return sendError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        'Trường dữ liệu không hợp lệ.',
+        req.aiRequestId
+      );
+    }
+
+    if (mode !== 'restaurant_form') {
+      return sendError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        'Chế độ yêu cầu không hợp lệ.',
+        req.aiRequestId
+      );
+    }
+
+    if (/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi.test(text) || /<[^>]*>/g.test(text)) {
+      return sendError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        'Nội dung không được chứa thẻ HTML hoặc Script.',
+        req.aiRequestId
+      );
+    }
+
+    const safeMaxLength = Math.min(maxLength || 2000, 2000);
+    if (text.length > safeMaxLength) {
+      return sendError(
+        res,
+        400,
+        'INVALID_REQUEST',
+        `Nội dung vượt quá giới hạn ${safeMaxLength} ký tự.`,
+        req.aiRequestId
+      );
+    }
+
+    const isMenuItem = context && (context.type === 'menu_item' || context.step === 'menu_item');
+    const fieldSpecificInstructions = {
+      name: isMenuItem
+        ? 'Làm cho tên món ăn rõ ràng, chuẩn chính tả tiếng Việt hơn nếu có lỗi (ví dụ: "bo ne hoa thien ly" -> "Bò né hoa thiên lý"). Tuyệt đối không thay đổi tên gốc hoặc tự ý thêm slogan quảng cáo dài dòng. Viết cực kỳ ngắn gọn.'
+        : 'Làm cho tên nhà hàng rõ ràng, chuẩn chính tả hơn nếu có lỗi. Tuyệt đối không thay đổi tên thương hiệu gốc của nhà hàng hoặc tự ý thêm slogan quảng cáo dài dòng. Viết cực kỳ ngắn gọn.',
+      description: isMenuItem
+        ? 'Viết lại thành một đoạn văn ngắn mô tả món ăn chuyên nghiệp, thơm ngon, hấp dẫn thực khách bằng tiếng Việt, nêu bật được hương vị, nguyên liệu. Có thể diễn đạt trôi chảy, kích thích vị giác hơn nhưng không tự bịa thêm thông tin không có trong input.'
+        : 'Viết lại thành một đoạn văn mô tả nhà hàng chuyên nghiệp, trôi chảy, hấp dẫn bằng tiếng Việt, nêu bật được thế mạnh ẩm thực. Có thể diễn đạt trôi chảy hơn nhưng không tự bịa thêm thông tin không có trong input.',
+      customCuisine: 'Làm đẹp và chuẩn hóa tên loại hình ẩm thực, sửa lỗi chính tả nhẹ (ví dụ: "mon viet" -> "Món Việt").',
+      address: 'Chuẩn hóa định dạng địa chỉ chi tiết, viết đúng chính tả tên đường, phường, quận. Tuyệt đối không tự chế ra địa chỉ khác.',
+      directionNotes: 'Viết lại hướng dẫn đường đi sao cho rõ ràng, dễ theo dõi cho thực khách.',
+      addressNotes: 'Tối ưu hóa các lưu ý về đỗ xe, ngõ ngách, hoặc nhận diện địa điểm một cách rõ ràng và hữu ích.',
+      statusLine: 'Viết lại thành một câu thông điệp trạng thái ngắn gọn, súc tích và thu hút.',
+      hoursNotes: 'Tối ưu hóa các lưu ý đặc biệt về thời gian hoạt động hoặc khung giờ phục vụ một cách rõ ràng, mạch lạc.',
+      highlights: 'Viết lại các điểm nổi bật của nhà hàng dưới dạng câu hoặc cụm từ ngắn gọn, sang trọng.',
+      suitableFor: 'Viết lại nhóm đối tượng phù hợp dưới dạng các cụm từ ngắn gọn, rõ ý.',
+      signatureDishes: 'Tối ưu hóa phần mô tả các món ăn đặc trưng của nhà hàng, làm nổi bật hương vị. Tuyệt đối không thêm món ăn mới không có trong input.',
+      amenities: 'Tối ưu hóa danh sách tiện ích đi kèm (ví dụ: wifi, máy lạnh, phòng riêng) một cách mạch lạc, dễ hiểu. Tuyệt đối không tự bịa thêm tiện ích mới.',
+      rules: 'Viết lại quy định nhà hàng một cách lịch sự, trang trọng, rõ ràng (ví dụ: "không mang đồ ăn ngoài" -> "Quý khách vui lòng không mang thức ăn từ bên ngoài vào nhà hàng").',
+      bookingNote: 'Viết lại lưu ý đặt bàn một cách dễ hiểu, thân thiện nhưng vẫn đảm bảo đầy đủ các thông tin cần chú ý.',
+      imageCaption: 'Viết lại alt/caption hình ảnh một cách ngắn gọn, mô tả đúng góc chụp hoặc món ăn hiển thị.'
+    };
+
+    const instructions = [
+      isMenuItem
+        ? 'Bạn là trợ lý biên tập nội dung thực đơn cho nhà hàng trên BookEat.'
+        : 'Bạn là trợ lý biên tập nội dung cho form đăng ký nhà hàng BookEat.',
+      'Nhiệm vụ: viết lại nội dung người dùng nhập sao cho chuyên nghiệp, rõ ràng, tự nhiên và hấp dẫn hơn (tối ưu hóa câu chữ).',
+      'Giữ nguyên ý nghĩa và mọi dữ kiện thực tế có trong input.',
+      'Không tự ý bịa thêm thông tin không có trong input.',
+      'Không thêm số điện thoại, địa chỉ, giá tiền, giờ mở cửa, món ăn, tiện ích nếu input không đề cập.',
+      'Không thay đổi dữ liệu có cấu trúc.',
+      'Chỉ trả về duy nhất nội dung đã viết lại sau khi được tối ưu hóa, không có lời mở đầu, lời giải thích hay bất kỳ ký tự nào khác.',
+      'Ngôn ngữ: tiếng Việt chuẩn dấu.',
+      fieldSpecificInstructions[fieldKey] || ''
+    ].join('\n');
+
+    req.aiTelemetry = {
+      ...(req.aiTelemetry || {}),
+      mode: 'restaurant_form',
+      role: req.user?.role || 'owner',
+      userId: req.user?._id || req.user?.id || null,
+      providerUsed: null,
+      fallbackReason: null,
+      status: 'pending',
+      usage: { inputTokens: 0, outputTokens: 0 },
+    };
+
+    const clientAbortController = new AbortController();
+    const handleClose = () => {
+      clientAbortController.abort(new Error('Client disconnected'));
+    };
+    res.once('close', handleClose);
+
+    try {
+      let polishedText = '';
+      let providerUsed = 'openai';
+      let fallbackUsed = false;
+      let usage = { inputTokens: 0, outputTokens: 0 };
+
+      for await (const event of provider.streamText({
+        instructions,
+        input: [
+          { role: 'user', content: text }
+        ],
+        config,
+        signal: clientAbortController.signal,
+      })) {
+        if (event.type === 'provider_status') {
+          providerUsed = event.providerUsed || providerUsed;
+          fallbackUsed = event.fallbackUsed === true;
+        } else if (event.type === 'delta') {
+          polishedText += event.text;
+        } else if (event.type === 'completed') {
+          usage = event.usage || usage;
+        }
+      }
+
+      res.removeListener('close', handleClose);
+
+      polishedText = polishedText.trim();
+      if (polishedText.startsWith('"') && polishedText.endsWith('"')) {
+        polishedText = polishedText.slice(1, -1).trim();
+      }
+      if (polishedText.startsWith('“') && polishedText.endsWith('”')) {
+        polishedText = polishedText.slice(1, -1).trim();
+      }
+
+      if (polishedText.length > safeMaxLength) {
+        polishedText = polishedText.slice(0, safeMaxLength);
+      }
+
+      req.aiTelemetry.status = 'success';
+      req.aiTelemetry.providerUsed = providerUsed;
+      req.aiTelemetry.fallback = fallbackUsed;
+      req.aiTelemetry.usage = usage;
+
+      return res.json({
+        success: true,
+        data: {
+          fieldKey,
+          originalText: text,
+          polishedText,
+          providerUsed,
+          fallbackUsed
+        },
+        requestId: req.aiRequestId
+      });
+
+    } catch (error) {
+      res.removeListener('close', handleClose);
+      const safeError = toPublicAiError(error);
+      req.aiTelemetry.status = 'failed';
+      req.aiTelemetry.errorCode = safeError.code;
+
+      console.error(`[AI] requestId=${req.aiRequestId} code=${safeError.code}`);
+      return sendError(
+        res,
+        safeError.code === 'AI_RATE_LIMITED' ? 429 : 500,
+        safeError.code,
+        safeError.message || 'AI đang bận, vui lòng thử lại sau.',
+        req.aiRequestId
+      );
+    }
   },
 });
 

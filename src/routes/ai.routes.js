@@ -187,6 +187,9 @@ const createAiRouter = (controller = aiController, options = {}) => {
   const knowledgeController = options.knowledgeController || aiKnowledgeController;
   const confirmProtect = options.confirmProtect || protect;
   const confirmCustomer = options.confirmCustomer || restrictTo('customer');
+  const polishTextHandler = controller.polishText
+    || aiController.polishText
+    || ((req, res) => res.sendStatus(501));
 
   router.use((req, res, next) => {
     const startedAt = process.hrtime.bigint();
@@ -238,6 +241,7 @@ const createAiRouter = (controller = aiController, options = {}) => {
   router.post('/mock-chat', controller.mockChat);
   router.get('/knowledge/search', rateLimiter, knowledgeController.search);
   router.post('/chat/stream', rateLimiter, controller.streamChat);
+  router.post('/polish-text', protect, restrictTo('restaurant_owner'), rateLimiter, polishTextHandler);
   router.get('/pending-actions/:id', requireAiCustomer, pendingController.getPendingAction);
   router.post('/pending-actions/:id/cancel', requireAiCustomer, pendingController.cancelPendingAction);
 
