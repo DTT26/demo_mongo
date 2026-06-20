@@ -44,14 +44,32 @@ const getPaymentPlanCode = (paymentOrMetadata) => getPlanCode(
   || paymentOrMetadata?.plan
 );
 
-const getCurrentActiveSubscription = (restaurantId, now = new Date()) => Subscription.findOne({
-  restaurantId,
-  status: 'active',
-  $or: [
-    { currentPeriodEnd: { $gt: now } },
-    { expiredAt: { $gt: now } },
-  ],
-}).sort({ currentPeriodEnd: -1, expiredAt: -1, createdAt: -1 });
+const getCurrentActiveSubscription = async (restaurantId, now = new Date()) => {
+  let restaurant = null;
+  try {
+    const query = Restaurant.findById(restaurantId);
+    if (query && typeof query.select === 'function') {
+      const selected = query.select('ownerId');
+      restaurant = typeof selected.lean === 'function' ? await selected.lean() : await selected;
+    } else if (query) {
+      restaurant = await query;
+    }
+  } catch (err) {
+    // ignored
+  }
+
+  let filter = { restaurantId, status: 'active' };
+  if (restaurant?.ownerId) {
+    filter = { ownerId: restaurant.ownerId, status: 'active' };
+  }
+  return Subscription.findOne({
+    ...filter,
+    $or: [
+      { currentPeriodEnd: { $gt: now } },
+      { expiredAt: { $gt: now } },
+    ],
+  }).sort({ currentPeriodEnd: -1, expiredAt: -1, createdAt: -1 });
+};
 
 const expireOldPendingPayments = async ({ userId, targetType, targetId }) => {
   await expirePendingPayments({ userId, targetType, targetId });

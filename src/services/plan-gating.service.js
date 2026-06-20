@@ -39,10 +39,26 @@ const expireSubscriptionIfNeeded = async (subscription, now = new Date()) => {
 };
 
 const getActiveSubscriptionForRestaurant = async (restaurantId) => {
-  const subscription = await Subscription.findOne({
-    restaurantId,
-    status: 'active',
-  }).sort({ planCode: -1, currentPeriodEnd: -1, expiredAt: -1, createdAt: -1 });
+  let restaurant = null;
+  try {
+    const query = Restaurant.findById(restaurantId);
+    if (query && typeof query.select === 'function') {
+      const selected = query.select('ownerId');
+      restaurant = typeof selected.lean === 'function' ? await selected.lean() : await selected;
+    } else if (query) {
+      restaurant = await query;
+    }
+  } catch (err) {
+    // ignored
+  }
+
+  let filter = { restaurantId, status: 'active' };
+  if (restaurant?.ownerId) {
+    filter = { ownerId: restaurant.ownerId, status: 'active' };
+  }
+
+  const subscription = await Subscription.findOne(filter)
+    .sort({ planCode: -1, currentPeriodEnd: -1, expiredAt: -1, createdAt: -1 });
 
   return expireSubscriptionIfNeeded(subscription);
 };

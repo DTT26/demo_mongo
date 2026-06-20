@@ -253,6 +253,8 @@ exports.getMyRestaurants = async (req, res) => {
       phoneNumber: r.phoneNumber,
       email: r.email,
       address: r.address,
+      cuisineTypes: r.cuisineTypes,
+      operatingHours: r.operatingHours,
       ...normalizeRestaurantImages(r),
       approvalStatus: r.approvalStatus,
       rejectionReason: r.rejectionReason,
