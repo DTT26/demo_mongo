@@ -12,7 +12,7 @@ const http = require('http');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 // ─────────────────────────────────────────────
@@ -160,4 +160,7 @@ server.listen(PORT, () => {
   // Start waitlist expiry cron job
   const { startWaitlistExpiryJob } = require('./src/services/waitlist-expiry.service');
   startWaitlistExpiryJob(io);
+}).on('error', (err) => {
+  console.error('❌ Server startup error:', err.message);
+  process.exit(1);
 });
