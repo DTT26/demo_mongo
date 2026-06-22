@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome API</title>
+  <style>
+    body {font-family: 'Inter', sans-serif; display:flex; justify-content:center; align-items:center; height:100vh; background:linear-gradient(135deg, #f5f7fa, #c3cfe2); margin:0;}
+    pre {background:#fff; padding:2rem; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1);}
+  </style>
+</head>
+<body>
+  <pre>{"message":"Welcome to the API"}</pre>
+</body>
+</html>        const data = await response.json();
+        renderStudents(data);
+      } catch (err) {
+        document.getElementById("students").innerHTML =
+          "<p class='error'>Failed to load data. " + err.message + "</p>";
+      }
+    }
+
+    function renderStudents(students) {
+      const container = document.getElementById("students");
+      if (!Array.isArray(students) || students.length === 0) {
+        container.innerHTML = "<p class='empty'>No students found.</p>";
+        return;
+      }
+      const list = document.createElement("ul");
+      list.className = "student-list";
+      students.forEach((s) => {
+        const li = document.createElement("li");
+        li.className = "student-item";
+        li.innerHTML = `
+          <h2>${s.name}</h2>
+          <p><strong>Age:</strong> ${s.age}</p>
+          <p><strong>Major:</strong> ${s.major}</p>
+        `;
+        list.appendChild(li);
+      });
+      container.innerHTML = "";
+      container.appendChild(list);
+    }
+
+    // Run on page load
+    fetchStudents();
+  </script>
+</body>
+</html>

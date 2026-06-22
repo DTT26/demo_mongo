@@ -1,5 +1,7 @@
 const express = require('express');
+require('dotenv').config();
 const cors = require('cors');
+
 
 // Import kết nối database
 require('./db');
@@ -9,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(cors());
+app.use(express.static('public'));
 
 const Student = require('./models/student');
 
@@ -29,7 +32,7 @@ app.get('/students', async (req, res) => {
 
 // Root route
 app.get('/', (req, res) => {
-  res.json({ message: 'Welcome to the API' });
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Welcome API</title></head><body><pre>{"message":"Welcome to the API"}</pre></body></html>`);
 });
 
 app.listen(PORT, () => {
